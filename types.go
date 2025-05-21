@@ -44,6 +44,12 @@ type PlanMerge struct {
 	Iteration int
 }
 
+type DBIndex interface {
+	Databases() []string
+	Tables(database string) []string
+	Paths(database string, table string) []string
+}
+
 type Index interface {
 	Batch(add []*IndexEntry, rm []string) Promise[int32]
 	Get(path string) *IndexEntry
