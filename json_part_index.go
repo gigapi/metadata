@@ -66,7 +66,7 @@ func newJsonPartIndex(rootPath string, database string, table string, partPath s
 	return res, err
 }
 
-func (J *jsonPartIndex) GetMergePlan(layer string, database string, table string, iteration int) (*PlanMerge, error) {
+func (J *jsonPartIndex) GetMergePlan(layer string, database string, table string, iteration int) (*MergePlan, error) {
 	if database != J.database || table != J.table {
 		return nil, nil
 	}
@@ -99,7 +99,7 @@ func (J *jsonPartIndex) GetMergePlan(layer string, database string, table string
 	}
 	uid, _ := uuid.NewUUID()
 
-	return &PlanMerge{
+	return &MergePlan{
 		Database:  J.database,
 		Table:     J.table,
 		From:      from,
@@ -108,7 +108,7 @@ func (J *jsonPartIndex) GetMergePlan(layer string, database string, table string
 	}, nil
 }
 
-func (J *jsonPartIndex) EndMerge(plan *PlanMerge) error {
+func (J *jsonPartIndex) EndMerge(plan *MergePlan) error {
 	J.m.Lock()
 	defer J.m.Unlock()
 	for _, file := range plan.From {

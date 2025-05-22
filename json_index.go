@@ -27,7 +27,7 @@ func NewJSONIndex(root string, database string, table string) Index {
 	}
 }
 
-func (J *JSONIndex) GetMergePlan(layer string, database string, table string, iteration int) (*PlanMerge, error) {
+func (J *JSONIndex) GetMergePlan(layer string, database string, table string, iteration int) (*MergePlan, error) {
 	if database != J.database || table != J.table {
 		return nil, nil
 	}
@@ -46,7 +46,7 @@ func (J *JSONIndex) GetMergePlan(layer string, database string, table string, it
 	return nil, nil
 }
 
-func (J *JSONIndex) EndMerge(plan *PlanMerge) error {
+func (J *JSONIndex) EndMerge(plan *MergePlan) error {
 	if len(plan.From) == 0 {
 		return nil
 	}

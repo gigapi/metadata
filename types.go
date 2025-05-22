@@ -34,7 +34,7 @@ type QueryOptions struct {
 	Iteration int
 }
 
-type PlanMerge struct {
+type MergePlan struct {
 	ID        string
 	Layer     string
 	Database  string
@@ -62,8 +62,8 @@ type Index interface {
 }
 
 type MergePlanner interface {
-	GetMergePlan(layer string, database string, table string, iteration int) (*PlanMerge, error)
-	EndMerge(plan *PlanMerge) error
+	GetMergePlan(layer string, database string, table string, iteration int) (*MergePlan, error)
+	EndMerge(plan *MergePlan) error
 }
 
 type Querier interface {
