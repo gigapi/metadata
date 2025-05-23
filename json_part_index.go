@@ -125,7 +125,7 @@ func (J *jsonPartIndex) GetMergePlanner() MergePlanner {
 	return J
 }
 
-var _ Index = &jsonPartIndex{}
+var _ TableIndex = &jsonPartIndex{}
 
 func (J *jsonPartIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 	if options.Database != J.database || options.Table != J.table {
@@ -153,8 +153,11 @@ func (J *jsonPartIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 	return res, nil
 }
 
-func (J *jsonPartIndex) addToDropQueue(files []string) {
-	J.dropQueue = append(J.dropQueue, files...)
+func (J *jsonPartIndex) addToDropQueue(files []*IndexEntry) {
+	for _, f := range files {
+		J.dropQueue = append(J.dropQueue, f.Path)
+	}
+
 }
 
 func (J *jsonPartIndex) RmFromDropQueue(files []string) Promise[int32] {
@@ -254,7 +257,7 @@ func (J *jsonPartIndex) populateFiles(iter *jsoniter.Iterator) error {
 	return nil
 }
 
-func (J *jsonPartIndex) Batch(add []*IndexEntry, rm []string) Promise[int32] {
+func (J *jsonPartIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	_add, err := J.entry2JEntry(add)
 	if err != nil {
 		return Fulfilled[int32](err, 0)
@@ -352,10 +355,10 @@ func (J *jsonPartIndex) recalcMax() {
 	})
 }
 
-func (J *jsonPartIndex) rm(path []string) bool {
+func (J *jsonPartIndex) rm(path []*IndexEntry) bool {
 	rm := false
 	for _, entry := range path {
-		e, ok := J.entries.Load(entry)
+		e, ok := J.entries.Load(&entry.Path)
 		if !ok {
 			continue
 		}
@@ -363,7 +366,7 @@ func (J *jsonPartIndex) rm(path []string) bool {
 		rm = true
 		J.rowCount -= _e.RowCount
 		J.parquetSizeBytes -= _e.SizeBytes
-		J.entries.Delete(entry)
+		J.entries.Delete(entry.Path)
 		if _e.MinTime == J.minTime {
 			J.recalcMin()
 		}

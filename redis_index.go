@@ -31,6 +31,7 @@ func indexEntry2Redis(ie *IndexEntry, cmd string) redisIndexEntry {
 	r.StrMaxTime = strconv.FormatInt(ie.MaxTime, 10)
 	r.IndexEntry.MinTime = 0
 	r.IndexEntry.MaxTime = 0
+	r.Cmd = cmd
 	return r
 }
 
@@ -50,6 +51,58 @@ type RedisIndex struct {
 	patchSha        string
 	getMergePlanSha string
 	endMergeSha     string
+}
+
+func getRedisClient(u *url.URL) (*redis.Client, error) {
+
+	strDb := strings.Trim(u.Path, "/")
+	iDb, err := strconv.Atoi(strDb)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Redis DB number: %s", strDb)
+	}
+
+	opts := &redis.Options{
+		Addr: fmt.Sprintf("%s", u.Host),
+		DB:   iDb,
+	}
+
+	if u.User != nil && u.User.Username() != "" {
+		opts.Username = u.User.Username()
+		if pwd, ok := u.User.Password(); ok {
+			opts.Password = pwd
+		}
+	}
+	if u.Scheme == "rediss" {
+		opts.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			tlsConfig := &tls.Config{
+				InsecureSkipVerify: true,
+			}
+			return tls.Dial(network, addr, tlsConfig)
+		}
+	}
+
+	return redis.NewClient(opts), nil
+}
+
+func NewRedisIndex(URL string) (TableIndex, error) {
+	u, err := url.Parse(URL)
+	if err != nil {
+		return nil, err
+	}
+	idx := &RedisIndex{url: u}
+
+	client, err := getRedisClient(u)
+	if err != nil {
+		return nil, err
+	}
+	idx.c = client
+
+	err = idx.initFuncs()
+	if err != nil {
+		return nil, err
+	}
+
+	return idx, nil
 }
 
 type redisMergePlan struct {
@@ -113,49 +166,6 @@ func (r *RedisIndex) GetQuerier() Querier {
 	return r
 }
 
-func NewRedisIndex(URL string) (Index, error) {
-	u, err := url.Parse(URL)
-	if err != nil {
-		return nil, err
-	}
-
-	strDb := strings.Trim(u.Path, "/")
-	iDb, err := strconv.Atoi(strDb)
-	if err != nil {
-		return nil, fmt.Errorf("invalid Redis DB number: %s", strDb)
-	}
-
-	idx := &RedisIndex{url: u}
-	opts := &redis.Options{
-		Addr: fmt.Sprintf("%s", u.Host),
-		DB:   iDb,
-	}
-
-	if u.User != nil && u.User.Username() != "" {
-		opts.Username = u.User.Username()
-		if pwd, ok := u.User.Password(); ok {
-			opts.Password = pwd
-		}
-	}
-	if u.Scheme == "rediss" {
-		opts.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			tlsConfig := &tls.Config{
-				InsecureSkipVerify: true,
-			}
-			return tls.Dial(network, addr, tlsConfig)
-		}
-	}
-
-	idx.c = redis.NewClient(opts)
-
-	err = idx.initFuncs()
-	if err != nil {
-		return nil, err
-	}
-
-	return idx, nil
-}
-
 func (r *RedisIndex) initFuncs() error {
 	var err error
 	r.patchSha, err = r.c.ScriptLoad(context.Background(), string(SCRIPT_PATCH_INDEX)).Result()
@@ -170,7 +180,7 @@ func (r *RedisIndex) initFuncs() error {
 	return err
 }
 
-func (r *RedisIndex) Batch(add []*IndexEntry, rm []string) Promise[int32] {
+func (r *RedisIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	var cmds []any
 	for _, entry := range add {
 		cmd, err := json.Marshal(indexEntry2Redis(entry, "ADD"))
@@ -179,8 +189,8 @@ func (r *RedisIndex) Batch(add []*IndexEntry, rm []string) Promise[int32] {
 		}
 		cmds = append(cmds, string(cmd))
 	}
-	for _, path := range rm {
-		cmd, err := json.Marshal(indexEntry2Redis(&IndexEntry{Path: path}, "DELETE"))
+	for _, ie := range rm {
+		cmd, err := json.Marshal(indexEntry2Redis(ie, "DELETE"))
 		if err != nil {
 			return Fulfilled[int32](err, 0)
 		}
@@ -263,7 +273,7 @@ func (r *RedisIndex) GetDropQueue() []string {
 	return res
 }
 
-func (r *RedisIndex) scan(scanFn func(cursor uint64) (uint64, error)) error {
+func redisScan(scanFn func(cursor uint64) (uint64, error)) error {
 	var err error
 	var cursor uint64 = 0
 	for {
@@ -318,7 +328,7 @@ func (r *RedisIndex) getMainKeys(options QueryOptions) ([]string, error) {
 	if options.Before.Unix() > 0 {
 		dayBefore = options.Before.Unix()
 	}
-	err := r.scan(func(cursor uint64) (uint64, error) {
+	err := redisScan(func(cursor uint64) (uint64, error) {
 		keys, cursor, err := r.c.Scan(context.Background(), cursor, pattern, 10000).Result()
 		if err != nil {
 			return 0, err
@@ -422,7 +432,7 @@ func (r *RedisIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 			continue
 		}
 		_mainKey := mainKey
-		err = r.scan(func(cursor uint64) (uint64, error) {
+		err = redisScan(func(cursor uint64) (uint64, error) {
 			_keys, cursor, err :=
 				r.c.HScan(context.Background(), _mainKey, cursor, "*", 10000).Result()
 			if err != nil {

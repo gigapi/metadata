@@ -8,6 +8,11 @@ local function generate_uuid()
     end)
 end
 
+-- Function to get the directory path from a full path
+local function get_dir(path)
+    return string.match(path, "(.+)/[^/]+$")
+end
+
 -- Function to create and push a new merge object
 local function create_and_push_new_merge(merge_key, path, size)
 	local current_time = redis.call("TIME")[1]
@@ -34,13 +39,26 @@ local function delete_file(entry)
         return {success = false, error = "Invalid file path format for deletion: " .. entry.path}
     end
 
-    -- Delete the hash field from the main key
     redis.call("HDEL", main_key, entry.path)
+    local dir = get_dir(entry.path)
+    local files_cnt = redis.call("HINCRBY", "folders:" .. entry.database .. ":" .. entry.table, dir, -1)
+    if files_cnt == 0 then
+        redis.call("HDEL", "folders:" .. entry.database .. ":" .. entry.table, dir)
+    end
+    
+    local folders_cnt = redis.call("HLEN", "folders:" .. entry.database .. ":" .. entry.table)
+    if folders_cnt == 0 then
+        redis.call("DEL", "folders:" .. entry.database .. ":" .. entry.table)
+    end
+
     return {success = true}
 end
 
 -- Function to process a single file
 local function process_file(entry)
+    if entry.cmd == "DELETE" then
+        return delete_file(entry)
+    end
     -- Extract the index from the file path
     local path, index = string.match(entry.path, "(.+)/[^/]+%.(%d+)%.parquet$")
 
@@ -49,17 +67,17 @@ local function process_file(entry)
     end
 
 	local index_num = tonumber(index)
-    if entry.cmd == "DELETE" then
-        return {success = delete_file(entry)}
-    end
 
-    if index_num > #KEYS then
-        return {success = true}
-    end
+    local dir = get_dir(entry.path)
+    redis.call("HINCRBY", "folders:" .. entry.database .. ":" .. entry.table, dir, 1)
 
     -- Create a Redis entry for the file
 	local main_key = hash_key(entry)
     redis.call("HSET", main_key, entry.path, cjson.encode(entry))
+
+    if index_num > #KEYS then
+        return {success = true}
+    end
 
     -- Get the last value from the merge list
     local merge_key = "merge:" .. entry.database .. ":" .. entry.table .. ":" .. index .. ":idle"

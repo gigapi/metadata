@@ -19,7 +19,7 @@ type JSONIndex struct {
 	parts    map[string]*jsonPartIndex
 }
 
-func NewJSONIndex(root string, database string, table string) Index {
+func NewJSONIndex(root string, database string, table string) TableIndex {
 	return &JSONIndex{
 		root:     root,
 		database: database,
@@ -68,9 +68,9 @@ func (J *JSONIndex) GetQuerier() Querier {
 	return J
 }
 
-func (J *JSONIndex) Batch(add []*IndexEntry, rm []string) Promise[int32] {
+func (J *JSONIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	addByPath := make(map[string][]*IndexEntry)
-	rmByPath := make(map[string][]string)
+	rmByPath := make(map[string][]*IndexEntry)
 	paths := make(map[string]bool)
 	for _, entry := range add {
 		_path := path.Dir(entry.Path)
@@ -78,7 +78,7 @@ func (J *JSONIndex) Batch(add []*IndexEntry, rm []string) Promise[int32] {
 		paths[_path] = true
 	}
 	for _, entry := range rm {
-		_path := path.Dir(entry)
+		_path := path.Dir(entry.Path)
 		rmByPath[_path] = append(rmByPath[_path], entry)
 		paths[_path] = true
 	}
