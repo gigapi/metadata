@@ -27,14 +27,11 @@ func NewJSONIndex(root string, database string, table string) TableIndex {
 	}
 }
 
-func (J *JSONIndex) GetMergePlan(layer string, database string, table string, iteration int) (*MergePlan, error) {
-	if database != J.database || table != J.table {
-		return nil, nil
-	}
+func (J *JSONIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
 	J.lock.Lock()
 	defer J.lock.Unlock()
 	for _, part := range J.parts {
-		plan, err := part.GetMergePlan(layer, database, table, iteration)
+		plan, err := part.GetMergePlan(layer, iteration)
 		if err != nil {
 			return nil, err
 		}
@@ -60,11 +57,11 @@ func (J *JSONIndex) EndMerge(plan *MergePlan) error {
 	return nil
 }
 
-func (J *JSONIndex) GetMergePlanner() MergePlanner {
+func (J *JSONIndex) GetMergePlanner() TableMergePlanner {
 	return J
 }
 
-func (J *JSONIndex) GetQuerier() Querier {
+func (J *JSONIndex) GetQuerier() TableQuerier {
 	return J
 }
 
@@ -210,12 +207,6 @@ func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 }
 
 func (J *JSONIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
-	if options.Table != J.table {
-		return nil, nil
-	}
-	if options.Database != J.database {
-		return nil, nil
-	}
 	hours, err := J.findHours(options)
 	if err != nil {
 		return nil, err

@@ -66,10 +66,7 @@ func newJsonPartIndex(rootPath string, database string, table string, partPath s
 	return res, err
 }
 
-func (J *jsonPartIndex) GetMergePlan(layer string, database string, table string, iteration int) (*MergePlan, error) {
-	if database != J.database || table != J.table {
-		return nil, nil
-	}
+func (J *jsonPartIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
 	suffix := fmt.Sprintf(".%d.parquet", iteration)
 	var from []string
 	var size int64
@@ -117,20 +114,17 @@ func (J *jsonPartIndex) EndMerge(plan *MergePlan) error {
 	return nil
 }
 
-func (J *jsonPartIndex) GetQuerier() Querier {
+func (J *jsonPartIndex) GetQuerier() TableQuerier {
 	return J
 }
 
-func (J *jsonPartIndex) GetMergePlanner() MergePlanner {
+func (J *jsonPartIndex) GetMergePlanner() TableMergePlanner {
 	return J
 }
 
 var _ TableIndex = &jsonPartIndex{}
 
 func (J *jsonPartIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
-	if options.Database != J.database || options.Table != J.table {
-		return nil, nil
-	}
 	var res []*IndexEntry
 	var suffix string
 	if options.Iteration != 0 {

@@ -26,8 +26,6 @@ type IndexEntry struct {
 }
 
 type QueryOptions struct {
-	Database  string
-	Table     string
 	Folder    string
 	After     time.Time
 	Before    time.Time
@@ -57,15 +55,15 @@ type TableIndex interface {
 	Stop()
 	RmFromDropQueue(files []string) Promise[int32]
 	GetDropQueue() []string
-	GetMergePlanner() MergePlanner
-	GetQuerier() Querier
+	GetMergePlanner() TableMergePlanner
+	GetQuerier() TableQuerier
 }
 
-type MergePlanner interface {
-	GetMergePlan(layer string, database string, table string, iteration int) (*MergePlan, error)
+type TableMergePlanner interface {
+	GetMergePlan(layer string, iteration int) (*MergePlan, error)
 	EndMerge(plan *MergePlan) error
 }
 
-type Querier interface {
+type TableQuerier interface {
 	Query(options QueryOptions) ([]*IndexEntry, error)
 }

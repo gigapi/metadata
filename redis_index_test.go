@@ -11,7 +11,7 @@ func TestSave(t *testing.T) {
 	MergeConfigurations = [][3]int64{
 		{10, 10 * 1024 * 1024, 1},
 	}
-	idx, err := NewRedisIndex("redis://localhost:6379/0")
+	idx, err := NewRedisIndex("redis://localhost:6379/0", "default", "test")
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestSaveAndDel(t *testing.T) {
 	MergeConfigurations = [][3]int64{
 		{10, 10 * 1024 * 1024, 1},
 	}
-	idx, err := NewRedisIndex("redis://localhost:6379/0")
+	idx, err := NewRedisIndex("redis://localhost:6379/0", "default", "test")
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
@@ -88,15 +88,13 @@ func TestRedisIndex2(t *testing.T) {
 	MergeConfigurations = [][3]int64{
 		{10, 10 * 1024 * 1024, 1},
 	}
-	idx, err := NewRedisIndex("redis://localhost:6379/0")
+	idx, err := NewRedisIndex("redis://localhost:6379/0", "default", "test")
 	if err != nil {
 		t.Fatalf("Failed to create index: %v", err)
 	}
 
 	ies, err := idx.GetQuerier().Query(QueryOptions{
-		Database: "default",
-		Table:    "test",
-		After:    time.Now().Add(-3 * 24 * time.Hour),
+		After: time.Now().Add(-3 * 24 * time.Hour),
 	})
 	fmt.Println("Total:", len(ies))
 }

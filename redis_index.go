@@ -51,6 +51,9 @@ type RedisIndex struct {
 	patchSha        string
 	getMergePlanSha string
 	endMergeSha     string
+
+	database string
+	table    string
 }
 
 func getRedisClient(u *url.URL) (*redis.Client, error) {
@@ -84,12 +87,16 @@ func getRedisClient(u *url.URL) (*redis.Client, error) {
 	return redis.NewClient(opts), nil
 }
 
-func NewRedisIndex(URL string) (TableIndex, error) {
+func NewRedisIndex(URL string, database string, table string) (TableIndex, error) {
 	u, err := url.Parse(URL)
 	if err != nil {
 		return nil, err
 	}
-	idx := &RedisIndex{url: u}
+	idx := &RedisIndex{
+		url:      u,
+		database: database,
+		table:    table,
+	}
 
 	client, err := getRedisClient(u)
 	if err != nil {
@@ -111,10 +118,10 @@ type redisMergePlan struct {
 	Paths []string `json:"paths"`
 }
 
-func (r *RedisIndex) GetMergePlan(layer string, database string, table string, iteration int) (*MergePlan, error) {
+func (r *RedisIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
 	res, err := r.c.EvalSha(context.Background(), r.getMergePlanSha, []string{
-		database,
-		table,
+		r.database,
+		r.table,
 		strconv.Itoa(iteration),
 		strconv.FormatInt(MergeConfigurations[iteration-1][1], 10),
 	}, nil).Result()
@@ -137,8 +144,8 @@ func (r *RedisIndex) GetMergePlan(layer string, database string, table string, i
 	return &MergePlan{
 		ID:        plan.ID,
 		Layer:     layer,
-		Database:  database,
-		Table:     table,
+		Database:  r.database,
+		Table:     r.table,
 		From:      plan.Paths,
 		To:        filepath.Join(firstFileDir, fmt.Sprintf("%s.%d.parquet", uuid.New().String(), iteration+1)),
 		Iteration: iteration,
@@ -158,11 +165,11 @@ func (r *RedisIndex) EndMerge(plan *MergePlan) error {
 	return err
 }
 
-func (r *RedisIndex) GetMergePlanner() MergePlanner {
+func (r *RedisIndex) GetMergePlanner() TableMergePlanner {
 	return r
 }
 
-func (r *RedisIndex) GetQuerier() Querier {
+func (r *RedisIndex) GetQuerier() TableQuerier {
 	return r
 }
 
@@ -291,7 +298,7 @@ func redisScan(scanFn func(cursor uint64) (uint64, error)) error {
 func (r *RedisIndex) getMainKeys(options QueryOptions) ([]string, error) {
 	if options.Folder != "" {
 		firstFolder := strings.SplitN(strings.TrimPrefix(options.Folder, "/"), string(os.PathSeparator), 2)[0]
-		mainKey := fmt.Sprintf("files:%s:%s:%s", options.Database, options.Table, firstFolder)
+		mainKey := fmt.Sprintf("files:%s:%s:%s", r.database, r.table, firstFolder)
 		exist, err := r.c.Exists(context.Background(), mainKey).Result()
 		if err != nil {
 			return nil, err
@@ -306,7 +313,7 @@ func (r *RedisIndex) getMainKeys(options QueryOptions) ([]string, error) {
 		var keys []string
 		for start := options.After; start.Before(options.Before); start = start.Add(time.Hour * 24) {
 			mainKey := fmt.Sprintf("files:%s:%s:date=%s",
-				options.Database, options.Table, start.Format("2006-01-02"))
+				r.database, r.table, start.Format("2006-01-02"))
 			exist, err := r.c.Exists(context.Background(), mainKey).Result()
 			if err != nil {
 				return nil, err
@@ -318,7 +325,7 @@ func (r *RedisIndex) getMainKeys(options QueryOptions) ([]string, error) {
 		}
 		return keys, nil
 	}
-	pattern := fmt.Sprintf("files:%s:%s:*", options.Database, options.Table)
+	pattern := fmt.Sprintf("files:%s:%s:*", r.database, r.table)
 	var allKeys []string
 	var dayAfter int64 = 0
 	if options.After.Unix() > 0 {
