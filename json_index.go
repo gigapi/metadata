@@ -24,6 +24,7 @@ func NewJSONIndex(root string, database string, table string) TableIndex {
 		root:     root,
 		database: database,
 		table:    table,
+		parts:    map[string]*jsonPartIndex{},
 	}
 }
 
@@ -84,7 +85,7 @@ func (J *JSONIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	defer J.lock.Unlock()
 
 	var promises []Promise[int32]
-	for partPath, _ := range paths {
+	for partPath := range paths {
 		idx, err := J.populate(partPath)
 		if err != nil {
 			//TODO: we should do something with the error
@@ -160,7 +161,7 @@ func (J *JSONIndex) GetDropQueue() []string {
 
 func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 	var hours []time.Time
-	filepath.Walk(path.Join(J.root, J.database, J.table), func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(path.Join(J.root, J.database, J.table), func(path string, info os.FileInfo, err error) error {
 		if !info.IsDir() {
 			return nil
 		}
@@ -172,7 +173,8 @@ func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 			if err != nil {
 				return err
 			}
-			dirs := strings.Split(path, fmt.Sprintf("%v", filepath.Separator))
+			sep := string(filepath.Separator)
+			dirs := strings.Split(path, sep)
 			dateDir := dirs[len(dirs)-2]
 			date, err := time.Parse("2006-01-02", dateDir[5:])
 			if err != nil {
@@ -184,8 +186,11 @@ func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	var _hours []time.Time
-	if options.Before.Unix() != 0 {
+	if options.Before.Unix() > 0 {
 		for i := len(hours) - 1; i >= 0; i-- {
 			if hours[i].Unix() < options.Before.Unix() {
 				_hours = append(_hours, hours[i])
@@ -193,7 +198,7 @@ func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 		}
 		hours = _hours
 	}
-	if options.After.Unix() != 0 {
+	if options.After.Unix() > 0 {
 		_after := time.Unix(options.After.Unix(), 0).Round(time.Hour)
 		for _, hour := range hours {
 			if hour.Unix() >= _after.Unix() {

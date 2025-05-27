@@ -19,9 +19,10 @@ import (
 
 type redisIndexEntry struct {
 	IndexEntry
-	StrMinTime string `json:"str_min_time"`
-	StrMaxTime string `json:"str_max_time"`
-	Cmd        string `json:"cmd"`
+	StrMinTime   string `json:"str_min_time"`
+	StrMaxTime   string `json:"str_max_time"`
+	StrChunkTime string `json:"str_chunk_time"`
+	Cmd          string `json:"cmd"`
 }
 
 func indexEntry2Redis(ie *IndexEntry, cmd string) redisIndexEntry {
@@ -29,8 +30,10 @@ func indexEntry2Redis(ie *IndexEntry, cmd string) redisIndexEntry {
 	r.IndexEntry = *ie
 	r.StrMinTime = strconv.FormatInt(ie.MinTime, 10)
 	r.StrMaxTime = strconv.FormatInt(ie.MaxTime, 10)
+	r.StrChunkTime = strconv.FormatInt(ie.ChunkTime, 10)
 	r.IndexEntry.MinTime = 0
 	r.IndexEntry.MaxTime = 0
+	r.IndexEntry.ChunkTime = 0
 	r.Cmd = cmd
 	return r
 }
@@ -41,6 +44,9 @@ func (r *redisIndexEntry) ToIndexEntry() *IndexEntry {
 	}
 	if r.StrMaxTime != "" {
 		r.IndexEntry.MaxTime, _ = strconv.ParseInt(r.StrMaxTime, 10, 64)
+	}
+	if r.StrChunkTime != "" {
+		r.IndexEntry.ChunkTime, _ = strconv.ParseInt(r.StrChunkTime, 10, 64)
 	}
 	return &r.IndexEntry
 }
@@ -218,16 +224,21 @@ func (r *RedisIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 }
 
 func (r *RedisIndex) Get(path string) *IndexEntry {
-	res, err := r.c.Get(context.Background(), "files:"+path).Result()
+	firstFolder := strings.Split(path, "/")[0]
+	res, err := r.c.HGet(
+		context.Background(),
+		fmt.Sprintf("files:%s:%s:%s", r.database, r.table, firstFolder),
+		path,
+	).Result()
 	if err != nil {
 		return nil
 	}
-	e := &IndexEntry{}
+	e := &redisIndexEntry{}
 	err = json.Unmarshal([]byte(res), e)
 	if err != nil {
 		return nil
 	}
-	return e
+	return e.ToIndexEntry()
 }
 
 func (r *RedisIndex) Run() {

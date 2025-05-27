@@ -54,11 +54,12 @@ type jsonPartIndex struct {
 func newJsonPartIndex(rootPath string, database string, table string, partPath string,
 ) (*jsonPartIndex, error) {
 	res := &jsonPartIndex{
-		rootPath: rootPath,
-		database: database,
-		table:    table,
-		idxPath:  path.Join(rootPath, database, table, partPath),
-		entries:  &sync.Map{},
+		rootPath:     rootPath,
+		database:     database,
+		table:        table,
+		idxPath:      path.Join(rootPath, database, table, "data", partPath),
+		entries:      &sync.Map{},
+		filesInMerge: make(map[string]bool),
 	}
 	res.updateCtx, res.doUpdate = context.WithCancel(context.Background())
 	res.workCtx, res.stop = context.WithCancel(context.Background())
@@ -96,11 +97,13 @@ func (J *jsonPartIndex) GetMergePlan(layer string, iteration int) (*MergePlan, e
 	}
 	uid, _ := uuid.NewUUID()
 
+	tablePath := path.Join(J.rootPath, J.database, J.table, "data") + "/"
+	partPath := J.idxPath[len(tablePath):]
 	return &MergePlan{
 		Database:  J.database,
 		Table:     J.table,
 		From:      from,
-		To:        path.Join(J.idxPath, fmt.Sprintf("%s.%d.parquet", uid.String(), iteration+1)),
+		To:        path.Join(partPath, fmt.Sprintf("%s.%d.parquet", uid.String(), iteration+1)),
 		Iteration: iteration,
 	}, nil
 }
@@ -135,10 +138,10 @@ func (J *jsonPartIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 		if suffix != "" && !strings.HasSuffix(_v.Path, suffix) {
 			return true
 		}
-		if options.Before.Unix() != 0 && _v.MinTime > options.Before.UnixNano() {
+		if options.Before.Unix() > 0 && _v.MinTime > options.Before.UnixNano() {
 			return true
 		}
-		if options.After.Unix() != 0 && _v.MaxTime < options.After.UnixNano() {
+		if options.After.Unix() > 0 && _v.MaxTime < options.After.UnixNano() {
 			return true
 		}
 		res = append(res, J.jEntry2Entry(_v))
@@ -352,7 +355,7 @@ func (J *jsonPartIndex) recalcMax() {
 func (J *jsonPartIndex) rm(path []*IndexEntry) bool {
 	rm := false
 	for _, entry := range path {
-		e, ok := J.entries.Load(&entry.Path)
+		e, ok := J.entries.Load(entry.Path)
 		if !ok {
 			continue
 		}
