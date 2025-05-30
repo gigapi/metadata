@@ -2,6 +2,8 @@
 
 # <img src="https://github.com/user-attachments/assets/74a1fa93-5e7e-476d-93cb-be565eca4a59" height=25 /> GigAPI Metadata Engine
 
+[![Metadata Redis CI](https://github.com/gigapi/metadata/actions/workflows/redis-ci.yml/badge.svg)](https://github.com/gigapi/metadata/actions/workflows/redis-ci.yml)
+
 Gigapi Metadata provides a high-performance indexing system for managing metadata about data files (typically Parquet files) organized in time-partitioned structures. It supports efficient querying, merging operations, and provides both local JSON file storage and distributed Redis storage backends.
 
 ## Features
