@@ -159,6 +159,8 @@ go test ./...
 
 This project is licensed under the Apache License 2.0. [13](#0-12) 
 
+## Documentation
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gigapi/metadata)
 
 ## Contributing
