@@ -223,7 +223,7 @@ func (r *RedisIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	return res
 }
 
-func (r *RedisIndex) Get(path string) *IndexEntry {
+func (r *RedisIndex) Get(layer string, path string) *IndexEntry {
 	firstFolder := strings.Split(path, "/")[0]
 	res, err := r.c.HGet(
 		context.Background(),
@@ -268,7 +268,7 @@ func (r *RedisIndex) AddToDropQueue(files []string) Promise[int32] {
 	return Fulfilled[int32](nil, 0)
 }
 
-func (r *RedisIndex) RmFromDropQueue(files []string) Promise[int32] {
+func (r *RedisIndex) RmFromDropQueue(layer string, files []string) Promise[int32] {
 	res := NewPromise[int32]()
 	go func() {
 		for _, file := range files {
@@ -283,7 +283,7 @@ func (r *RedisIndex) RmFromDropQueue(files []string) Promise[int32] {
 	return res
 }
 
-func (r *RedisIndex) GetDropQueue() []string {
+func (r *RedisIndex) GetDropQueue(layer string) []string {
 	res, err := r.c.LRange(context.Background(), "drop", 0, -1).Result()
 	if err != nil {
 		return nil
@@ -474,4 +474,18 @@ func (r *RedisIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 		res = append(res, ies...)
 	}
 	return res, nil
+}
+
+func (r *RedisIndex) GetMovePlanner() TableMovePlanner {
+	return r
+}
+
+func (r *RedisIndex) GetMovePlan() *MovePlan {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r *RedisIndex) EndMove(plan *MovePlan) error {
+	//TODO implement me
+	panic("implement me")
 }

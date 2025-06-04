@@ -11,26 +11,32 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type jsonIndexEntry struct {
+	IndexEntry
 	Id          uint32 `json:"id"`
-	Layer       string `json:"layer"`
-	Path        string `json:"path"`
-	SizeBytes   int64  `json:"size_bytes"`
-	RowCount    int64  `json:"row_count"`
-	ChunkTime   int64  `json:"chunk_time"`
-	MinTime     int64  `json:"min_time"`
-	MaxTime     int64  `json:"max_time"`
 	Range       string `json:"range"`
 	Type        string `json:"type"`
 	_marshalled string `json:"-"`
+}
+
+type jsonPartIdxOpts struct {
+	rootPath string
+	database string
+	table    string
+	partPath string
+	layers   []jsonLayer
+	layer    string
 }
 
 type jsonPartIndex struct {
 	rootPath string
 	database string
 	table    string
+	layer    string
+	layers   []jsonLayer
 
 	idxPath string
 
@@ -49,22 +55,34 @@ type jsonPartIndex struct {
 	minTime          int64
 	maxTime          int64
 	filesInMerge     map[string]bool
+	filesInMove      map[string]bool
 }
 
-func newJsonPartIndex(rootPath string, database string, table string, partPath string,
-) (*jsonPartIndex, error) {
+var _ TableIndex = &jsonPartIndex{}
+
+func newJsonPartIndex(opts jsonPartIdxOpts) (*jsonPartIndex, error) {
 	res := &jsonPartIndex{
-		rootPath:     rootPath,
-		database:     database,
-		table:        table,
-		idxPath:      path.Join(rootPath, database, table, "data", partPath),
+		rootPath:     opts.rootPath,
+		database:     opts.database,
+		table:        opts.table,
+		idxPath:      path.Join(opts.rootPath, opts.database, opts.table, "data", opts.partPath),
 		entries:      &sync.Map{},
 		filesInMerge: make(map[string]bool),
+		layers:       opts.layers,
 	}
 	res.updateCtx, res.doUpdate = context.WithCancel(context.Background())
 	res.workCtx, res.stop = context.WithCancel(context.Background())
 	err := res.populate()
 	return res, err
+}
+
+func (J *jsonPartIndex) getLayer(name string) int {
+	for i, layer := range J.layers {
+		if layer.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 func (J *jsonPartIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
@@ -125,8 +143,6 @@ func (J *jsonPartIndex) GetMergePlanner() TableMergePlanner {
 	return J
 }
 
-var _ TableIndex = &jsonPartIndex{}
-
 func (J *jsonPartIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 	var res []*IndexEntry
 	var suffix string
@@ -157,7 +173,7 @@ func (J *jsonPartIndex) addToDropQueue(files []*IndexEntry) {
 
 }
 
-func (J *jsonPartIndex) RmFromDropQueue(files []string) Promise[int32] {
+func (J *jsonPartIndex) RmFromDropQueue(layer string, files []string) Promise[int32] {
 	J.m.Lock()
 	defer J.m.Unlock()
 
@@ -184,7 +200,7 @@ func (J *jsonPartIndex) RmFromDropQueue(files []string) Promise[int32] {
 	return p
 }
 
-func (J *jsonPartIndex) GetDropQueue() []string {
+func (J *jsonPartIndex) GetDropQueue(layes string) []string {
 	return J.dropQueue
 }
 
@@ -278,16 +294,10 @@ func (J *jsonPartIndex) entry2JEntry(entries []*IndexEntry) ([]*jsonIndexEntry, 
 	for i, entry := range entries {
 		id := atomic.AddUint32(&J.lastId, 1)
 		_entry := &jsonIndexEntry{
-			Id:        id,
-			Layer:     entry.Layer,
-			Path:      entry.Path,
-			SizeBytes: entry.SizeBytes,
-			RowCount:  entry.RowCount,
-			ChunkTime: entry.ChunkTime,
-			MinTime:   entry.MinTime,
-			MaxTime:   entry.MaxTime,
-			Range:     "1h",
-			Type:      "compacted",
+			Id:         id,
+			IndexEntry: *entry,
+			Range:      "1h",
+			Type:       "compacted",
 		}
 		_marshalled, err := json.Marshal(_entry)
 		if err != nil {
@@ -499,21 +509,61 @@ func (J *jsonPartIndex) Stop() {
 }
 
 func (J *jsonPartIndex) jEntry2Entry(_e *jsonIndexEntry) *IndexEntry {
-	return &IndexEntry{
-		Path:      _e.Path,
-		SizeBytes: _e.SizeBytes,
-		RowCount:  _e.RowCount,
-		ChunkTime: _e.ChunkTime,
-		MinTime:   _e.MinTime,
-		MaxTime:   _e.MaxTime,
-	}
+	return &_e.IndexEntry
 }
 
-func (J *jsonPartIndex) Get(path string) *IndexEntry {
+func (J *jsonPartIndex) Get(layer string, path string) *IndexEntry {
 	e, _ := J.entries.Load(path)
 	if e == nil {
 		return nil
 	}
 	_e := e.(*jsonIndexEntry)
 	return J.jEntry2Entry(_e)
+}
+
+func (J *jsonPartIndex) GetMovePlan(layer string) *MovePlan {
+
+	J.m.Lock()
+	defer J.m.Unlock()
+	var plan *MovePlan
+	J.entries.Range(func(key, value any) bool {
+		val := value.(*jsonIndexEntry)
+		if J.filesInMerge[val.Path] {
+			return true
+		}
+		layerTdx := J.getLayer(val.Layer)
+		if layerTdx < 0 {
+			return true
+		}
+		layerTo := ""
+		if layerTdx+1 < len(J.layers) {
+			layerTo = J.layers[layerTdx+1].Name
+		}
+		if J.layers[layerTdx].TTL.Nanoseconds() > 0 &&
+			time.Now().UnixNano()-val.ChunkTime >= J.layers[layerTdx].TTL.Nanoseconds() {
+			plan = &MovePlan{
+				ID:        "",
+				Database:  J.database,
+				Table:     J.table,
+				PathFrom:  val.Path,
+				LayerFrom: val.Layer,
+				PathTo:    val.Path,
+				LayerTo:   layerTo,
+			}
+			return false
+		}
+		return true
+	})
+	return plan
+}
+
+func (J *jsonPartIndex) EndMove(plan *MovePlan) error {
+	J.m.Lock()
+	defer J.m.Unlock()
+	delete(J.filesInMove, plan.PathFrom)
+	return nil
+}
+
+func (J *jsonPartIndex) GetMovePlanner() TableMovePlanner {
+	return J
 }

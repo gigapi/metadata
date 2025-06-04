@@ -11,6 +11,13 @@ type MergeConfigurationsConf [][3]int64
 
 var MergeConfigurations MergeConfigurationsConf
 
+type Layer struct {
+	URL  string
+	Name string
+	Type string
+	TTL  time.Duration
+}
+
 type IndexEntry struct {
 	Layer     string         `json:"layer"`
 	Database  string         `json:"database"`
@@ -23,6 +30,7 @@ type IndexEntry struct {
 	Max       map[string]any `json:"max"`
 	MinTime   int64          `json:"min_time"`
 	MaxTime   int64          `json:"max_time"`
+	WriterID  string         `json:"writer_id"`
 }
 
 type QueryOptions struct {
@@ -42,6 +50,16 @@ type MergePlan struct {
 	Iteration int
 }
 
+type MovePlan struct {
+	ID        string
+	Database  string
+	Table     string
+	PathFrom  string
+	LayerFrom string
+	PathTo    string
+	LayerTo   string
+}
+
 type DBIndex interface {
 	Databases() ([]string, error)
 	Tables(database string) ([]string, error)
@@ -50,18 +68,24 @@ type DBIndex interface {
 
 type TableIndex interface {
 	Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32]
-	Get(path string) *IndexEntry
+	Get(layer string, path string) *IndexEntry
 	Run()
 	Stop()
-	RmFromDropQueue(files []string) Promise[int32]
-	GetDropQueue() []string
+	RmFromDropQueue(layer string, files []string) Promise[int32]
+	GetDropQueue(layer string) []string
 	GetMergePlanner() TableMergePlanner
 	GetQuerier() TableQuerier
+	GetMovePlanner() TableMovePlanner
 }
 
 type TableMergePlanner interface {
 	GetMergePlan(layer string, iteration int) (*MergePlan, error)
 	EndMerge(plan *MergePlan) error
+}
+
+type TableMovePlanner interface {
+	GetMovePlan(layer string) *MovePlan
+	EndMove(plan *MovePlan) error
 }
 
 type TableQuerier interface {
