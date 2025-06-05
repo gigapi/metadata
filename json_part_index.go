@@ -398,7 +398,7 @@ func (J *jsonPartIndex) flush() {
 			onErr(err)
 			return
 		}
-		stream.WriteString(string(strD))
+		stream.WriteRaw(string(strD))
 	}
 	stream.WriteArrayEnd()
 
