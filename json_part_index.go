@@ -69,9 +69,13 @@ func newJsonPartIndex(opts jsonPartIdxOpts) (*jsonPartIndex, error) {
 		filesInMerge: make(map[string]bool),
 		layers:       opts.layers,
 	}
+	_, err := os.Stat(res.idxPath)
+	if os.IsNotExist(err) {
+		os.MkdirAll(res.idxPath, 0o755)
+	}
 	res.updateCtx, res.doUpdate = context.WithCancel(context.Background())
 	res.workCtx, res.stop = context.WithCancel(context.Background())
-	err := res.populate()
+	err = res.populate()
 	return res, err
 }
 

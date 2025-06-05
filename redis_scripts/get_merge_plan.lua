@@ -21,7 +21,8 @@ local function process_idle_item()
     local merge_item_json = redis.call("LPOP", merge_key_idle)
     if merge_item_json then
         local merge_item = cjson.decode(merge_item_json)
-        if tonumber(merge_item.time) < current_time then
+        if tonumber(merge_item.time_s) > current_time then
+            redis.call("LPUSH", merge_key_idle, merge_item_json)
             return false
         end
         merge_item.time = current_time + 1800 -- 30m timeout to reprocess the dead items

@@ -21,7 +21,7 @@ local function create_and_push_new_merge(merge_key, path, size)
 	local current_time = redis.call("TIME")[1]
     local new_merge = cjson.encode({
         id = generate_uuid(),
-        time = current_time,
+        time_s = current_time,
         paths = {path},
         size = size
     })
@@ -54,14 +54,15 @@ local function delete_file(entry)
         redis.call("DEL", "folders:" .. entry.database .. ":" .. entry.table)
     end
 
-    local drop_queue_key = "drop:" .. entry.database .. ":".. entry.table .. ":".. entry.layer .. ":".. entry.writer_id
+    local drop_queue_key = "drop:" .. entry.database .. ":".. entry.table .. ":".. entry.layer .. ":"..
+            entry.writer_id .. ":idle"
     local new_drop = cjson.encode({
         writer_id = entry.writer_id,
         layer = entry.layer,
         path = entry.path,
         database = entry.database,
         table = entry.table,
-        time_s = tonumber(redis.call("TIME")[1]) + 30
+        time_s = tonumber(redis.call("TIME")[1]) + 1
     })
     redis.call("LPUSH", drop_queue_key, new_drop)
 

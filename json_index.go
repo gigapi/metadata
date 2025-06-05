@@ -70,12 +70,12 @@ func (J *JSONIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	}
 	var promises []Promise[int32]
 	for l := range layers {
-		promises = append(promises, J.batchLayer(J.parts[l], addByLayer[l], rmByLayer[l]))
+		promises = append(promises, J.batchLayer(l, addByLayer[l], rmByLayer[l]))
 	}
 	return NewWaitForAll[int32](promises)
 }
 
-func (J *JSONIndex) batchLayer(parts map[string]*jsonPartIndex, add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
+func (J *JSONIndex) batchLayer(layer string, add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	addByPath := make(map[string][]*IndexEntry)
 	rmByPath := make(map[string][]*IndexEntry)
 	paths := make(map[string]bool)
@@ -92,9 +92,9 @@ func (J *JSONIndex) batchLayer(parts map[string]*jsonPartIndex, add []*IndexEntr
 
 	var promises []Promise[int32]
 	for partPath := range paths {
-		idx := parts[partPath]
-		if idx == nil {
-			return Fulfilled[int32](fmt.Errorf("part \"%s\" not found", partPath), 0)
+		idx, err := J.populate(partPath, layer)
+		if err != nil {
+			return Fulfilled[int32](err, 0)
 		}
 		promises = append(promises, idx.Batch(addByPath[partPath], rmByPath[partPath]))
 	}

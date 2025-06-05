@@ -32,8 +32,12 @@ func (q *redisTaskQueue[T]) processEntry() (T, error) {
 	if err != nil {
 		return res, err
 	}
+	if eStr == "" {
+		return res, nil
+	}
 
 	err = json.Unmarshal([]byte(eStr.(string)), &res)
+
 	return res, err
 }
 
