@@ -50,45 +50,6 @@ func NewJSONIndex(root string, database string, table string, layers []Layer) Ta
 	}
 }
 
-func (J *JSONIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
-	J.lock.Lock()
-	defer J.lock.Unlock()
-	parts, ok := J.parts[layer]
-	if !ok {
-		return nil, nil
-	}
-	for _, part := range parts {
-		plan, err := part.GetMergePlan(layer, iteration)
-		if err != nil {
-			return nil, err
-		}
-		if plan == nil || len(plan.From) == 0 {
-			continue
-		}
-		return plan, nil
-	}
-	return nil, nil
-}
-
-func (J *JSONIndex) EndMerge(plan *MergePlan) error {
-	if len(plan.From) == 0 {
-		return nil
-	}
-	J.lock.Lock()
-	defer J.lock.Unlock()
-	parts := J.parts[plan.Layer]
-	dir := path.Dir(plan.From[0])
-	part := parts[dir]
-	if part != nil {
-		return part.EndMerge(plan)
-	}
-	return nil
-}
-
-func (J *JSONIndex) GetMergePlanner() TableMergePlanner {
-	return J
-}
-
 func (J *JSONIndex) GetQuerier() TableQuerier {
 	return J
 }
@@ -202,39 +163,6 @@ func (J *JSONIndex) Stop() {
 	}
 }
 
-func (J *JSONIndex) RmFromDropQueue(layer string, files []string) Promise[int32] {
-	filesByPath := make(map[string][]string)
-	for _, file := range files {
-		_path := path.Dir(file)
-		filesByPath[_path] = append(filesByPath[_path], file)
-	}
-	J.lock.Lock()
-	defer J.lock.Unlock()
-
-	var promises []Promise[int32]
-	for partPath, files := range filesByPath {
-		idx, err := J.populate(layer, partPath)
-		if err != nil {
-			//TODO: we should do something with the error
-			continue
-		}
-		promises = append(promises, idx.RmFromDropQueue(layer, files))
-	}
-	return NewWaitForAll[int32](promises)
-}
-
-func (J *JSONIndex) GetDropQueue(layer string) []string {
-	var queue []string
-	parts := J.parts[layer]
-	if parts == nil {
-		return nil
-	}
-	for _, idx := range parts {
-		queue = append(queue, idx.GetDropQueue(layer)...)
-	}
-	return queue
-}
-
 func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 	var hours []time.Time
 	err := filepath.Walk(path.Join(J.root, J.database, J.table), func(path string, info os.FileInfo, err error) error {
@@ -313,39 +241,4 @@ func (J *JSONIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 	}
 
 	return entries, nil
-}
-
-func (J *JSONIndex) GetMovePlan(layer string) *MovePlan {
-	J.lock.Lock()
-	defer J.lock.Unlock()
-	l := J.parts[layer]
-	if l == nil {
-		return nil
-	}
-	for _, p := range l {
-		mp := p.GetMovePlanner().GetMovePlan(layer)
-		if mp != nil {
-			return mp
-		}
-	}
-	return nil
-}
-
-func (J *JSONIndex) EndMove(plan *MovePlan) error {
-	J.lock.Lock()
-	defer J.lock.Unlock()
-	l := J.parts[plan.LayerFrom]
-	if l == nil {
-		return fmt.Errorf("layer \"%s\" not found", plan.LayerFrom)
-	}
-	dir := path.Dir(plan.PathFrom)
-	part := l[dir]
-	if part != nil {
-		return part.EndMove(plan)
-	}
-	return nil
-}
-
-func (J *JSONIndex) GetMovePlanner() TableMovePlanner {
-	return J
 }

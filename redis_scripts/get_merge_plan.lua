@@ -1,10 +1,15 @@
 -- Construct the merge key from the provided KEYS
-local database = KEYS[1]
-local table = KEYS[2]
-local index = KEYS[3]
--- Timeout before we take an idle merge plan into process
-local timeout_s = tonumber(KEYS[4])
-local merge_key_base = "merge:" .. database .. ":" .. table .. ":" .. index
+local prefix = KEYS[1]
+local database = KEYS[2]
+local table = KEYS[3]
+local suffix = KEYS[4]
+local layer = KEYS[5]
+local writer_id = KEYS[6]
+
+if suffix ~= "" then
+    suffix = suffix .. ":"
+end
+local merge_key_base = prefix .. ":" .. database .. ":" .. table .. ":" .. suffix .. layer .. ":" .. writer_id
 local merge_key_idle = merge_key_base .. ":idle"
 local merge_key_processing = merge_key_base .. ":processing"
 
@@ -16,10 +21,10 @@ local function process_idle_item()
     local merge_item_json = redis.call("LPOP", merge_key_idle)
     if merge_item_json then
         local merge_item = cjson.decode(merge_item_json)
-        if tonumber(merge_item.time) + timeout_s < tonumber(current_time) then
+        if tonumber(merge_item.time) < current_time then
             return false
         end
-        merge_item.time = current_time
+        merge_item.time = current_time + 1800 -- 30m timeout to reprocess the dead items
         local updated_item_json = cjson.encode(merge_item)
 
         -- Push the updated item to the processing list
@@ -38,7 +43,7 @@ local function process_processing_item()
         local processing_item = cjson.decode(processing_item_json)
 
         -- Check if the first item in processing is older than the timeout
-        if tonumber(current_time) - tonumber(processing_item.time) > timeout_s then
+        if current_time > tonumber(processing_item.time) then
             -- Remove the item from the processing list
             redis.call("LPOP", merge_key_processing)
 

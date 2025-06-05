@@ -12,10 +12,10 @@ type MergeConfigurationsConf [][3]int64
 var MergeConfigurations MergeConfigurationsConf
 
 type Layer struct {
-	URL  string
-	Name string
-	Type string
-	TTL  time.Duration
+	URL    string `json:"url"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	TTLSec int32  `json:"ttl_sec"`
 }
 
 type IndexEntry struct {
@@ -40,8 +40,13 @@ type QueryOptions struct {
 	Iteration int
 }
 
+type Identified interface {
+	Id() string
+}
+
 type MergePlan struct {
 	ID        string
+	WriterID  string
 	Layer     string
 	Database  string
 	Table     string
@@ -50,14 +55,37 @@ type MergePlan struct {
 	Iteration int
 }
 
+func (m MergePlan) Id() string {
+	return m.ID
+}
+
 type MovePlan struct {
 	ID        string
+	WriterID  string
 	Database  string
 	Table     string
 	PathFrom  string
 	LayerFrom string
 	PathTo    string
 	LayerTo   string
+}
+
+func (m MovePlan) Id() string {
+	return m.ID
+}
+
+type DropPlan struct {
+	ID       string
+	WriterID string
+	Layer    string
+	Database string
+	Table    string
+	Path     string
+	TimeS    int32
+}
+
+func (d DropPlan) Id() string {
+	return d.ID
 }
 
 type DBIndex interface {
@@ -71,21 +99,25 @@ type TableIndex interface {
 	Get(layer string, path string) *IndexEntry
 	Run()
 	Stop()
-	RmFromDropQueue(layer string, files []string) Promise[int32]
-	GetDropQueue(layer string) []string
 	GetMergePlanner() TableMergePlanner
 	GetQuerier() TableQuerier
 	GetMovePlanner() TableMovePlanner
+	GetDropPlanner() TableDropPlanner
+}
+
+type TableDropPlanner interface {
+	GetDropQueue(writerId string, layer string) (DropPlan, error)
+	RmFromDropQueue(plan DropPlan) Promise[int32]
 }
 
 type TableMergePlanner interface {
-	GetMergePlan(layer string, iteration int) (*MergePlan, error)
-	EndMerge(plan *MergePlan) error
+	GetMergePlan(writerId string, layer string, iteration int) (MergePlan, error)
+	EndMerge(plan MergePlan) Promise[int32]
 }
 
 type TableMovePlanner interface {
-	GetMovePlan(layer string) *MovePlan
-	EndMove(plan *MovePlan) error
+	GetMovePlan(writerId string, layer string) (MovePlan, error)
+	EndMove(plan MovePlan) Promise[int32]
 }
 
 type TableQuerier interface {

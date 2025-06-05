@@ -1,3 +1,6 @@
+local merge_conf = cjson.decode(KEYS[1])
+local move_conf = cjson.decode(KEYS[2])
+
 -- Function to generate a pseudo-UUID
 local function generate_uuid()
     local random = math.random
@@ -51,7 +54,50 @@ local function delete_file(entry)
         redis.call("DEL", "folders:" .. entry.database .. ":" .. entry.table)
     end
 
+    local drop_queue_key = "drop:" .. entry.database .. ":".. entry.table .. ":".. entry.layer .. ":".. entry.writer_id
+    local new_drop = cjson.encode({
+        writer_id = entry.writer_id,
+        layer = entry.layer,
+        path = entry.path,
+        database = entry.database,
+        table = entry.table,
+        time_s = tonumber(redis.call("TIME")[1]) + 30
+    })
+    redis.call("LPUSH", drop_queue_key, new_drop)
+
     return {success = true}
+end
+
+local function merge_entry(entry, index)
+    local merge_key = "merge:" .. entry.database .. ":" .. entry.table .. ":" .. index .. ":" .. entry.layer .. ":" .. entry.writer_id .. ":idle"
+    local last_merge = redis.call("LINDEX", merge_key, -1)
+
+    if not last_merge then
+        -- Create and push a new merge object
+        create_and_push_new_merge(merge_key, entry.path, entry.size_bytes)
+        return {success = true}
+    end
+
+    -- Parse JSON from the last merge entry
+    local last_merge_data = cjson.decode(last_merge)
+
+    if last_merge_data.size + entry.size_bytes > tonumber(merge_conf[index][2]) then
+        -- Create and push a new merge object
+        create_and_push_new_merge(merge_key, entry.path, entry.size_bytes)
+        return {success = true}
+    end
+
+    -- Update the last merge entry
+    last_merge_data.size = last_merge_data.size + entry.size_bytes
+    table.insert(last_merge_data.paths, entry.path)
+    local updated_merge = cjson.encode(last_merge_data)
+    redis.call("LSET", merge_key, -1, updated_merge)
+    return {success = true}
+end
+
+local function move_entry(entry)
+    local move_key = "move:".. entry.database.. ":".. entry.table.. ":".. entry.layer_from .. ":".. entry.writer_id
+    redis.call("LPUSH", move_key, cjson.encode(entry))
 end
 
 -- Function to process a single file
@@ -66,44 +112,27 @@ local function process_file(entry)
         return {success = false, error = "Invalid file path format: " .. entry.path}
     end
 
-	local index_num = tonumber(index)
+    local index_num = tonumber(index)
 
     local dir = get_dir(entry.path)
     redis.call("HINCRBY", "folders:" .. entry.database .. ":" .. entry.table, dir, 1)
 
     -- Create a Redis entry for the file
-	local main_key = hash_key(entry)
+    local main_key = hash_key(entry)
     redis.call("HSET", main_key, entry.path, cjson.encode(entry))
 
     if index_num > #KEYS then
         return {success = true}
     end
 
-    -- Get the last value from the merge list
-    local merge_key = "merge:" .. entry.database .. ":" .. entry.table .. ":" .. index .. ":idle"
-    local last_merge = redis.call("LINDEX", merge_key, -1)
+    local chunk_time_s = tonumber(entry.str_chunk_time) / 1000000000
+    local merge_time_s = chunk_time_s + tonumber(merge_conf[index_num][1])
+    local move_time_s = chunk_time_s + move_conf[entry.layer].ttl_sec
 
-    if not last_merge then
-        -- Create and push a new merge object
-        create_and_push_new_merge(merge_key, entry.path, entry.size_bytes)
-        return {success = true}
+    if move_conf[entry.layer].ttl_sec == 0 or merge_time_s <= move_time_s then
+        return merge_entry(entry, index_num)
     end
-
-    -- Parse JSON from the last merge entry
-    local last_merge_data = cjson.decode(last_merge)
-
-    if last_merge_data.size + entry.size_bytes > tonumber(KEYS[index_num]) then
-        -- Create and push a new merge object
-        create_and_push_new_merge(merge_key, entry.path, entry.size_bytes)
-        return {success = true}
-    end
-
-    -- Update the last merge entry
-    last_merge_data.size = last_merge_data.size + entry.size_bytes
-    table.insert(last_merge_data.paths, entry.path)
-    local updated_merge = cjson.encode(last_merge_data)
-    redis.call("LSET", merge_key, -1, updated_merge)
-    return {success = true}
+    return move_entry(entry)
 end
 
 -- Process all files

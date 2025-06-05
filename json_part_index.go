@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	jsoniter "github.com/json-iterator/go"
 	"os"
 	"path"
@@ -49,7 +48,7 @@ type jsonPartIndex struct {
 	stop      context.CancelFunc
 	lastId    uint32
 
-	dropQueue        []string
+	dropQueue        []DropPlan
 	parquetSizeBytes int64
 	rowCount         int64
 	minTime          int64
@@ -85,61 +84,7 @@ func (J *jsonPartIndex) getLayer(name string) int {
 	return -1
 }
 
-func (J *jsonPartIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
-	suffix := fmt.Sprintf(".%d.parquet", iteration)
-	var from []string
-	var size int64
-	if iteration > len(MergeConfigurations) {
-		return nil, fmt.Errorf("no more merge configurations available for iteration %d", iteration)
-	}
-	conf := MergeConfigurations[iteration-1]
-	J.m.Lock()
-	defer J.m.Unlock()
-	J.entries.Range(func(key, value interface{}) bool {
-		entry := value.(*jsonIndexEntry)
-		if !strings.HasSuffix(entry.Path, suffix) {
-			return true
-		}
-		if J.filesInMerge[entry.Path] {
-			return true
-		}
-		if size > conf[1] {
-			return false
-		}
-		from = append(from, entry.Path)
-		size += entry.SizeBytes
-		return true
-	})
-	for _, file := range from {
-		J.filesInMerge[file] = true
-	}
-	uid, _ := uuid.NewUUID()
-
-	tablePath := path.Join(J.rootPath, J.database, J.table, "data") + "/"
-	partPath := J.idxPath[len(tablePath):]
-	return &MergePlan{
-		Database:  J.database,
-		Table:     J.table,
-		From:      from,
-		To:        path.Join(partPath, fmt.Sprintf("%s.%d.parquet", uid.String(), iteration+1)),
-		Iteration: iteration,
-	}, nil
-}
-
-func (J *jsonPartIndex) EndMerge(plan *MergePlan) error {
-	J.m.Lock()
-	defer J.m.Unlock()
-	for _, file := range plan.From {
-		delete(J.filesInMerge, file)
-	}
-	return nil
-}
-
 func (J *jsonPartIndex) GetQuerier() TableQuerier {
-	return J
-}
-
-func (J *jsonPartIndex) GetMergePlanner() TableMergePlanner {
 	return J
 }
 
@@ -168,40 +113,16 @@ func (J *jsonPartIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
 
 func (J *jsonPartIndex) addToDropQueue(files []*IndexEntry) {
 	for _, f := range files {
-		J.dropQueue = append(J.dropQueue, f.Path)
+		J.dropQueue = append(J.dropQueue, DropPlan{
+			WriterID: f.WriterID,
+			Layer:    f.Layer,
+			Database: f.Database,
+			Table:    f.Table,
+			Path:     f.Path,
+			TimeS:    int32(time.Now().Add(time.Second * 30).Unix()),
+		})
 	}
 
-}
-
-func (J *jsonPartIndex) RmFromDropQueue(layer string, files []string) Promise[int32] {
-	J.m.Lock()
-	defer J.m.Unlock()
-
-	updated := false
-	for i := len(J.dropQueue) - 1; i >= 0; i-- {
-		for _, file := range files {
-			if J.dropQueue[i] != file {
-				continue
-			}
-			J.dropQueue[i] = J.dropQueue[len(J.dropQueue)-1]
-			J.dropQueue = J.dropQueue[:len(J.dropQueue)-1]
-			updated = true
-			break
-		}
-	}
-
-	if !updated {
-		return Fulfilled[int32](nil, 0)
-	}
-
-	p := NewPromise[int32]()
-	J.promises = append(J.promises, p)
-	J.doUpdate()
-	return p
-}
-
-func (J *jsonPartIndex) GetDropQueue(layes string) []string {
-	return J.dropQueue
 }
 
 func (J *jsonPartIndex) populate() error {
@@ -221,7 +142,26 @@ func (J *jsonPartIndex) populate() error {
 		switch s {
 		case "drop_queue":
 			for iterator.ReadArray() {
-				dropQueueEntry := iterator.ReadString()
+				var dropQueueEntry DropPlan
+				iterator.ReadMapCB(func(iterator *jsoniter.Iterator, s string) bool {
+					switch s {
+					case "writer_id":
+						dropQueueEntry.WriterID = iterator.ReadString()
+					case "layer":
+						dropQueueEntry.Layer = iterator.ReadString()
+					case "database":
+						dropQueueEntry.Database = iterator.ReadString()
+					case "table":
+						dropQueueEntry.Table = iterator.ReadString()
+					case "path":
+						dropQueueEntry.Path = iterator.ReadString()
+					case "time_s":
+						dropQueueEntry.TimeS = iterator.ReadInt32()
+					default:
+						iterator.Skip()
+					}
+					return true
+				})
 				J.dropQueue = append(J.dropQueue, dropQueueEntry)
 			}
 		case "type":
@@ -449,7 +389,12 @@ func (J *jsonPartIndex) flush() {
 		if i > 0 {
 			stream.WriteMore()
 		}
-		stream.WriteString(d)
+		strD, err := json.Marshal(d)
+		if err != nil {
+			onErr(err)
+			return
+		}
+		stream.WriteString(string(strD))
 	}
 	stream.WriteArrayEnd()
 
@@ -519,51 +464,4 @@ func (J *jsonPartIndex) Get(layer string, path string) *IndexEntry {
 	}
 	_e := e.(*jsonIndexEntry)
 	return J.jEntry2Entry(_e)
-}
-
-func (J *jsonPartIndex) GetMovePlan(layer string) *MovePlan {
-
-	J.m.Lock()
-	defer J.m.Unlock()
-	var plan *MovePlan
-	J.entries.Range(func(key, value any) bool {
-		val := value.(*jsonIndexEntry)
-		if J.filesInMerge[val.Path] {
-			return true
-		}
-		layerTdx := J.getLayer(val.Layer)
-		if layerTdx < 0 {
-			return true
-		}
-		layerTo := ""
-		if layerTdx+1 < len(J.layers) {
-			layerTo = J.layers[layerTdx+1].Name
-		}
-		if J.layers[layerTdx].TTL.Nanoseconds() > 0 &&
-			time.Now().UnixNano()-val.ChunkTime >= J.layers[layerTdx].TTL.Nanoseconds() {
-			plan = &MovePlan{
-				ID:        "",
-				Database:  J.database,
-				Table:     J.table,
-				PathFrom:  val.Path,
-				LayerFrom: val.Layer,
-				PathTo:    val.Path,
-				LayerTo:   layerTo,
-			}
-			return false
-		}
-		return true
-	})
-	return plan
-}
-
-func (J *jsonPartIndex) EndMove(plan *MovePlan) error {
-	J.m.Lock()
-	defer J.m.Unlock()
-	delete(J.filesInMove, plan.PathFrom)
-	return nil
-}
-
-func (J *jsonPartIndex) GetMovePlanner() TableMovePlanner {
-	return J
 }
