@@ -5,17 +5,20 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"math"
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
+
+type redisLayer struct {
+	Layer
+	LayerTo string `json:"layer_to"`
+}
 
 type redisIndexEntry struct {
 	IndexEntry
@@ -60,6 +63,7 @@ type RedisIndex struct {
 
 	database string
 	table    string
+	layers   []redisLayer
 }
 
 func getRedisClient(u *url.URL) (*redis.Client, error) {
@@ -93,15 +97,29 @@ func getRedisClient(u *url.URL) (*redis.Client, error) {
 	return redis.NewClient(opts), nil
 }
 
-func NewRedisIndex(URL string, database string, table string) (TableIndex, error) {
+func NewRedisIndex(URL string, database string, table string, layers []Layer) (TableIndex, error) {
 	u, err := url.Parse(URL)
 	if err != nil {
 		return nil, err
 	}
+
+	redisLayers := make([]redisLayer, len(layers))
+	for i, layer := range layers {
+		layerTo := ""
+		if i < len(layers)-1 {
+			layerTo = layers[i+1].Name
+		}
+		redisLayers = append(redisLayers, redisLayer{
+			Layer:   layer,
+			LayerTo: layerTo,
+		})
+	}
+
 	idx := &RedisIndex{
 		url:      u,
 		database: database,
 		table:    table,
+		layers:   redisLayers,
 	}
 
 	client, err := getRedisClient(u)
@@ -116,63 +134,6 @@ func NewRedisIndex(URL string, database string, table string) (TableIndex, error
 	}
 
 	return idx, nil
-}
-
-type redisMergePlan struct {
-	ID    string   `json:"id"`
-	Time  int32    `json:"time"`
-	Paths []string `json:"paths"`
-}
-
-func (r *RedisIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
-	res, err := r.c.EvalSha(context.Background(), r.getMergePlanSha, []string{
-		r.database,
-		r.table,
-		strconv.Itoa(iteration),
-		strconv.FormatInt(MergeConfigurations[iteration-1][1], 10),
-	}, nil).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute script: %v", err)
-	}
-	if res == nil || res.(string) == "" {
-		return nil, nil
-	}
-	var plan redisMergePlan
-	err = json.Unmarshal([]byte(res.(string)), &plan)
-
-	if len(plan.Paths) == 0 {
-		return nil, nil
-	}
-
-	firstFile := plan.Paths[0]
-	firstFileDir := filepath.Dir(firstFile)
-
-	return &MergePlan{
-		ID:        plan.ID,
-		Layer:     layer,
-		Database:  r.database,
-		Table:     r.table,
-		From:      plan.Paths,
-		To:        filepath.Join(firstFileDir, fmt.Sprintf("%s.%d.parquet", uuid.New().String(), iteration+1)),
-		Iteration: iteration,
-	}, err
-}
-
-func (r *RedisIndex) EndMerge(plan *MergePlan) error {
-	if plan == nil {
-		return nil
-	}
-	_, err := r.c.EvalSha(context.Background(), r.endMergeSha, []string{
-		plan.Database,
-		plan.Table,
-		strconv.Itoa(plan.Iteration),
-		plan.ID,
-	}).Result()
-	return err
-}
-
-func (r *RedisIndex) GetMergePlanner() TableMergePlanner {
-	return r
 }
 
 func (r *RedisIndex) GetQuerier() TableQuerier {
@@ -211,19 +172,34 @@ func (r *RedisIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	}
 	res := NewPromise[int32]()
 
-	var keys []string
-	for _, c := range MergeConfigurations {
-		keys = append(keys, strconv.FormatInt(c[1], 10))
+	var err error
+	var keys [2][]byte
+	keys[0], err = json.Marshal(MergeConfigurations)
+	if err != nil {
+		res.Done(0, err)
+		return res
+	}
+	lmap := make(map[string]redisLayer)
+	for _, layer := range r.layers {
+		lmap[layer.Name] = layer
+	}
+	keys[1], err = json.Marshal(lmap)
+	if err != nil {
+		res.Done(0, err)
+		return res
 	}
 
 	go func() {
-		_, err := r.c.EvalSha(context.Background(), r.patchSha, keys, cmds...).Result()
+		_, err := r.c.EvalSha(context.Background(), r.patchSha, []string{
+			string(keys[0]),
+			string(keys[1]),
+		}, cmds...).Result()
 		res.Done(0, err)
 	}()
 	return res
 }
 
-func (r *RedisIndex) Get(path string) *IndexEntry {
+func (r *RedisIndex) Get(layer string, path string) *IndexEntry {
 	firstFolder := strings.Split(path, "/")[0]
 	res, err := r.c.HGet(
 		context.Background(),
@@ -245,50 +221,6 @@ func (r *RedisIndex) Run() {
 }
 
 func (r *RedisIndex) Stop() {
-}
-
-type QEntry struct {
-	Path  string `json:"path"`
-	TimeS int32  `json:"time"`
-}
-
-func (r *RedisIndex) AddToDropQueue(files []string) Promise[int32] {
-	_files := make([]any, len(files))
-	for i, file := range files {
-		_file, err := json.Marshal(QEntry{
-			Path:  file,
-			TimeS: int32(time.Now().Unix()),
-		})
-		if err != nil {
-			return Fulfilled[int32](err, 0)
-		}
-		_files[i] = string(_file)
-	}
-	r.c.LPush(context.Background(), "drop", _files...)
-	return Fulfilled[int32](nil, 0)
-}
-
-func (r *RedisIndex) RmFromDropQueue(files []string) Promise[int32] {
-	res := NewPromise[int32]()
-	go func() {
-		for _, file := range files {
-			_, err := r.c.LRem(context.Background(), "drop", 1, file).Result()
-			if err != nil {
-				res.Done(0, err)
-				return
-			}
-		}
-		res.Done(0, nil)
-	}()
-	return res
-}
-
-func (r *RedisIndex) GetDropQueue() []string {
-	res, err := r.c.LRange(context.Background(), "drop", 0, -1).Result()
-	if err != nil {
-		return nil
-	}
-	return res
 }
 
 func redisScan(scanFn func(cursor uint64) (uint64, error)) error {

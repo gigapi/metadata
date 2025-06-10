@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -11,55 +12,67 @@ import (
 	"time"
 )
 
+type jsonLayer struct {
+	Layer
+	Path string
+}
+
+func layer2JsonLayer(layer Layer) jsonLayer {
+	path := ""
+	if strings.HasPrefix(layer.URL, "file://") {
+		path = strings.TrimPrefix(layer.URL, "file://")
+	}
+	return jsonLayer{
+		Layer: layer,
+		Path:  path,
+	}
+}
+
 type JSONIndex struct {
 	root     string
 	database string
 	table    string
 	lock     sync.Mutex
-	parts    map[string]*jsonPartIndex
+	parts    map[string]map[string]*jsonPartIndex
+	layers   []jsonLayer
 }
 
-func NewJSONIndex(root string, database string, table string) TableIndex {
-	return &JSONIndex{
+func NewJSONIndex(root string, database string, table string, layers []Layer) (TableIndex, error) {
+	var jLayers []jsonLayer
+	for _, layer := range layers {
+		jLayers = append(jLayers, layer2JsonLayer(layer))
+	}
+	res := &JSONIndex{
 		root:     root,
 		database: database,
 		table:    table,
-		parts:    map[string]*jsonPartIndex{},
+		parts:    map[string]map[string]*jsonPartIndex{},
+		layers:   jLayers,
 	}
-}
-
-func (J *JSONIndex) GetMergePlan(layer string, iteration int) (*MergePlan, error) {
-	J.lock.Lock()
-	defer J.lock.Unlock()
-	for _, part := range J.parts {
-		plan, err := part.GetMergePlan(layer, iteration)
+	for _, layer := range jLayers {
+		prefix := filepath.Join(layer.Path, database, table, "data")
+		err := filepath.Walk(prefix, func(path string, info fs.FileInfo, err error) error {
+			if info == nil {
+				return nil
+			}
+			if !info.IsDir() {
+				return nil
+			}
+			metadataPath := filepath.Join(path, "metadata.json")
+			if _, err := os.Stat(metadataPath); !os.IsNotExist(err) {
+				_, err := res.populate(layer.Name, path[len(prefix)+1:])
+				if err != nil {
+					return err
+				}
+				return filepath.SkipDir
+			}
+			return nil
+		})
 		if err != nil {
 			return nil, err
 		}
-		if plan == nil || len(plan.From) == 0 {
-			continue
-		}
-		return plan, nil
 	}
-	return nil, nil
-}
-
-func (J *JSONIndex) EndMerge(plan *MergePlan) error {
-	if len(plan.From) == 0 {
-		return nil
-	}
-	J.lock.Lock()
-	defer J.lock.Unlock()
-	dir := path.Dir(plan.From[0])
-	part := J.parts[dir]
-	if part != nil {
-		return part.EndMerge(plan)
-	}
-	return nil
-}
-
-func (J *JSONIndex) GetMergePlanner() TableMergePlanner {
-	return J
+	return res, nil
 }
 
 func (J *JSONIndex) GetQuerier() TableQuerier {
@@ -67,6 +80,27 @@ func (J *JSONIndex) GetQuerier() TableQuerier {
 }
 
 func (J *JSONIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
+	J.lock.Lock()
+	defer J.lock.Unlock()
+	addByLayer := make(map[string][]*IndexEntry)
+	rmByLayer := make(map[string][]*IndexEntry)
+	layers := make(map[string]bool)
+	for _, entry := range add {
+		addByLayer[entry.Layer] = append(addByLayer[entry.Layer], entry)
+		layers[entry.Layer] = true
+	}
+	for _, entry := range rm {
+		rmByLayer[entry.Layer] = append(rmByLayer[entry.Layer], entry)
+		layers[entry.Layer] = true
+	}
+	var promises []Promise[int32]
+	for l := range layers {
+		promises = append(promises, J.batchLayer(l, addByLayer[l], rmByLayer[l]))
+	}
+	return NewWaitForAll[int32](promises)
+}
+
+func (J *JSONIndex) batchLayer(layer string, add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	addByPath := make(map[string][]*IndexEntry)
 	rmByPath := make(map[string][]*IndexEntry)
 	paths := make(map[string]bool)
@@ -81,87 +115,85 @@ func (J *JSONIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 		paths[_path] = true
 	}
 
-	J.lock.Lock()
-	defer J.lock.Unlock()
-
 	var promises []Promise[int32]
 	for partPath := range paths {
-		idx, err := J.populate(partPath)
+		idx, err := J.populate(layer, partPath)
 		if err != nil {
-			//TODO: we should do something with the error
-			continue
+			return Fulfilled[int32](err, 0)
 		}
 		promises = append(promises, idx.Batch(addByPath[partPath], rmByPath[partPath]))
 	}
 	return NewWaitForAll[int32](promises)
 }
 
-func (J *JSONIndex) populate(dir string) (*jsonPartIndex, error) {
-	idx := J.parts[dir]
+func (J *JSONIndex) populate(layer string, dir string) (*jsonPartIndex, error) {
+	layerParts := J.parts[layer]
+	if layerParts == nil {
+		layerParts = make(map[string]*jsonPartIndex)
+		J.parts[layer] = layerParts
+	}
+	idx := layerParts[dir]
+	var _layer *jsonLayer
+	for _, l := range J.layers {
+		if l.Name == layer {
+			_layer = &l
+			break
+		}
+	}
+	if _layer == nil {
+		return nil, fmt.Errorf("layer \"%s\" not found", layer)
+	}
+	if _layer.Path == "" {
+		return nil, fmt.Errorf("layer path \"%s\" not supported", _layer.URL)
+	}
+
 	if idx != nil {
 		return idx, nil
 	}
-	idx, err := newJsonPartIndex(J.root, J.database, J.table, dir)
+	idx, err := newJsonPartIndex(jsonPartIdxOpts{
+		rootPath: _layer.Path,
+		database: J.database,
+		table:    J.table,
+		partPath: dir,
+		layers:   J.layers,
+		layer:    layer,
+	})
 	if err != nil {
 		return nil, err
 	}
 	idx.Run()
-	J.parts[dir] = idx
+	layerParts[dir] = idx
 	return idx, nil
 }
 
-func (J *JSONIndex) Get(_path string) *IndexEntry {
+func (J *JSONIndex) Get(layer string, _path string) *IndexEntry {
 	dir := path.Dir(_path)
 	J.lock.Lock()
 	defer J.lock.Unlock()
-	idx, err := J.populate(dir)
+	idx, err := J.populate(layer, dir)
 	if err != nil {
 		return nil
 	}
-	return idx.Get(_path)
+	return idx.Get(layer, _path)
 }
 
 func (J *JSONIndex) Run() {
 }
 
 func (J *JSONIndex) Stop() {
-	for _, idx := range J.parts {
-		idx.Stop()
-	}
-}
-
-func (J *JSONIndex) RmFromDropQueue(files []string) Promise[int32] {
-	filesByPath := make(map[string][]string)
-	for _, file := range files {
-		_path := path.Dir(file)
-		filesByPath[_path] = append(filesByPath[_path], file)
-	}
-	J.lock.Lock()
-	defer J.lock.Unlock()
-
-	var promises []Promise[int32]
-	for partPath, files := range filesByPath {
-		idx, err := J.populate(partPath)
-		if err != nil {
-			//TODO: we should do something with the error
-			continue
+	for _, l := range J.parts {
+		for _, idx := range l {
+			idx.Stop()
 		}
-		promises = append(promises, idx.RmFromDropQueue(files))
 	}
-	return NewWaitForAll[int32](promises)
 }
 
-func (J *JSONIndex) GetDropQueue() []string {
-	var queue []string
-	for _, idx := range J.parts {
-		queue = append(queue, idx.GetDropQueue()...)
-	}
-	return queue
-}
-
-func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
+func (J *JSONIndex) findHours(options QueryOptions, layer jsonLayer) ([]time.Time, error) {
 	var hours []time.Time
-	err := filepath.Walk(path.Join(J.root, J.database, J.table), func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(path.Join(layer.Path, J.database, J.table, "data"), func(path string, info os.FileInfo, err error) error {
+		if info == nil {
+			return nil
+		}
 		if !info.IsDir() {
 			return nil
 		}
@@ -212,23 +244,29 @@ func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 }
 
 func (J *JSONIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
-	hours, err := J.findHours(options)
-	if err != nil {
-		return nil, err
-	}
 	var entries []*IndexEntry
-	for _, hour := range hours {
-		idx, err := J.populate(path.Join(
-			fmt.Sprintf("date=%s", hour.Format("2006-01-02")),
-			fmt.Sprintf("hour=%02d", hour.Hour())))
+	for _, l := range J.layers {
+		if l.Path == "" {
+			continue
+		}
+		hours, err := J.findHours(options, l)
 		if err != nil {
 			return nil, err
 		}
-		_entries, err := idx.Query(options)
-		if err != nil {
-			return nil, err
+		for _, hour := range hours {
+			idx, err := J.populate(l.Name, path.Join(
+				fmt.Sprintf("date=%s", hour.Format("2006-01-02")),
+				fmt.Sprintf("hour=%02d", hour.Hour())))
+			if err != nil {
+				return nil, err
+			}
+			_entries, err := idx.Query(options)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, _entries...)
 		}
-		entries = append(entries, _entries...)
 	}
+
 	return entries, nil
 }

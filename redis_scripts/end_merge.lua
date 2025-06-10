@@ -2,10 +2,12 @@
 local database = KEYS[1]
 local table = KEYS[2]
 local index = KEYS[3]
-local merge_id = KEYS[4]
+local layer = KEYS[4]
+local writer_id = KEYS[5]
+local merge_id = KEYS[6]
 
 -- Construct the merge key
-local merge_key = "merge:" .. database .. ":" .. table .. ":" .. index .. ":processing"
+local merge_key = "merge:" .. database .. ":" .. table .. ":" .. index .. ":" .. layer .. ":" .. writer_id .. ":processing"
 
 -- Function to remove a merge plan by ID
 local function remove_merge_plan(key, id)

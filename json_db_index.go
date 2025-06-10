@@ -9,58 +9,83 @@ import (
 )
 
 type jsonDBIndex struct {
-	root string
+	layers []jsonLayer
 }
 
-/*func NewJSONDBIndex(root string) DBIndex {
-	return &jsonDBIndex{
-		root: root,
+func NewJSONDBIndex(layers []Layer) DBIndex {
+	jLayers := make([]jsonLayer, len(layers))
+	for i, layer := range layers {
+		jLayers[i] = layer2JsonLayer(layer)
 	}
-}*/
+	return &jsonDBIndex{
+		layers: jLayers,
+	}
+}
 
 func (j *jsonDBIndex) Databases() ([]string, error) {
-	ents, err := os.ReadDir(j.root)
-	if err != nil {
-		return nil, err
-	}
-	var res []string
-	for _, ent := range ents {
-		if ent.IsDir() {
-			res = append(res, ent.Name())
+	res := map[string]bool{}
+	for _, l := range j.layers {
+		ents, err := os.ReadDir(path.Join(l.Path))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, ent := range ents {
+			if ent.IsDir() {
+				res[ent.Name()] = true
+			}
 		}
 	}
-	return res, nil
+	_res := make([]string, 0, len(res))
+	for k := range res {
+		_res = append(_res, k)
+	}
+	return _res, nil
 }
 
 func (j *jsonDBIndex) Tables(database string) ([]string, error) {
-	ents, err := os.ReadDir(path.Join(j.root, database))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var res []string
-	for _, ent := range ents {
-		if ent.IsDir() {
-			res = append(res, ent.Name())
+	res := map[string]bool{}
+	for _, l := range j.layers {
+		ents, err := os.ReadDir(path.Join(l.Path, database))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, ent := range ents {
+			if ent.IsDir() {
+				res[ent.Name()] = true
+			}
 		}
 	}
-	return res, nil
+	_res := make([]string, 0, len(res))
+	for k := range res {
+		_res = append(_res, k)
+	}
+	return _res, nil
 }
 
-func (j *jsonDBIndex) Paths(database string, table string) []string {
-	root := path.Join(j.root, database, table)
-	var res []string
-	filepath.Walk(path.Join(j.root, database, table), func(path string, info os.FileInfo, err error) error {
-		if !info.IsDir() {
+func (j *jsonDBIndex) Paths(database string, table string) ([]string, error) {
+	res := map[string]bool{}
+	for _, l := range j.layers {
+		root := path.Join(l.Path, database, table)
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if !info.IsDir() {
+				return nil
+			}
+			if strings.HasPrefix(info.Name(), "hour=") {
+				res[path[len(root)+1:]] = true
+				return filepath.SkipDir
+			}
 			return nil
-		}
-		if strings.HasPrefix(info.Name(), "hour=") {
-			res = append(res, path[len(root):])
-			return filepath.SkipDir
-		}
-		return nil
-	})
-	return res
+		})
+	}
+	_res := make([]string, 0, len(res))
+	for k := range res {
+		_res = append(_res, k)
+	}
+	return _res, nil
 }
