@@ -12,7 +12,7 @@ var layers = []Layer{
 }
 
 func TestSave(t *testing.T) {
-	MergeConfigurations = [][3]int64{
+	MergeConfigurations = []MergeConfigurationsConf{
 		{10, 10 * 1024 * 1024, 1},
 	}
 	idx, err := NewRedisIndex(
@@ -52,7 +52,7 @@ func TestSave(t *testing.T) {
 }
 
 func TestSaveAndDel(t *testing.T) {
-	MergeConfigurations = [][3]int64{
+	MergeConfigurations = []MergeConfigurationsConf{
 		{10, 10 * 1024 * 1024, 1},
 	}
 	idx, err := NewRedisIndex(
@@ -101,7 +101,7 @@ func TestSaveAndDel(t *testing.T) {
 	}
 	fmt.Printf("%d items dropped in %v\n", len(ents), time.Since(start))
 
-	time.Sleep(time.Second)
+	time.Sleep(time.Second * 30)
 
 	start = time.Now()
 	var drops []DropPlan
@@ -131,7 +131,7 @@ func TestSaveAndDel(t *testing.T) {
 }
 
 func TestRedisIndex2(t *testing.T) {
-	MergeConfigurations = [][3]int64{
+	MergeConfigurations = []MergeConfigurationsConf{
 		{10, 10 * 1024 * 1024, 1},
 	}
 	idx, err := NewRedisIndex(
@@ -150,7 +150,7 @@ func TestRedisIndex2(t *testing.T) {
 }
 
 func TestRedisDBIndex(t *testing.T) {
-	MergeConfigurations = [][3]int64{
+	MergeConfigurations = []MergeConfigurationsConf{
 		{10, 10 * 1024 * 1024, 1},
 	}
 	idx, err := NewRedisDbIndex("redis://localhost:6379/0")

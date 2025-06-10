@@ -8,14 +8,17 @@ import (
 )
 
 func TestJSONSave(t *testing.T) {
-	MergeConfigurations = [][3]int64{
+	MergeConfigurations = []MergeConfigurationsConf{
 		{10, 10 * 1024 * 1024, 1},
 	}
-	idx := NewJSONIndex(
-		"redis://localhost:6379/0",
+	idx, err := NewJSONIndex(
+		"_testdata",
 		"default",
 		"test",
 		layers)
+	if err != nil {
+		panic(err)
+	}
 	var ents []*IndexEntry
 	now := time.Now()
 	threeDaysAgo := now.Add(-3 * 24 * time.Hour)
@@ -37,7 +40,7 @@ func TestJSONSave(t *testing.T) {
 	}
 
 	p := idx.Batch(ents, nil)
-	_, err := p.Get()
+	_, err = p.Get()
 	if err != nil {
 		panic(err)
 	}
@@ -45,14 +48,17 @@ func TestJSONSave(t *testing.T) {
 }
 
 func TestJSONSaveAndRM(t *testing.T) {
-	MergeConfigurations = [][3]int64{
+	MergeConfigurations = []MergeConfigurationsConf{
 		{10, 10 * 1024 * 1024, 1},
 	}
-	idx := NewJSONIndex(
-		"redis://localhost:6379/0",
+	idx, err := NewJSONIndex(
+		"_testdata",
 		"default",
 		"test",
 		layers)
+	if err != nil {
+		panic(err)
+	}
 	var ents []*IndexEntry
 	now := time.Now()
 	threeDaysAgo := now.Add(-3 * 24 * time.Hour)
@@ -74,7 +80,7 @@ func TestJSONSaveAndRM(t *testing.T) {
 	}
 
 	p := idx.Batch(ents, nil)
-	_, err := p.Get()
+	_, err = p.Get()
 	if err != nil {
 		panic(err)
 	}
