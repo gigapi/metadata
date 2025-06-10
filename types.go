@@ -7,9 +7,21 @@ import (
 // MergeConfiguration is array of arrays of:
 // [[timeout_sec, max_size, merge_iteration_id], ...]
 // You have to init MergeConfigurations in the very beginning
-type MergeConfigurationsConf [][3]int64
+type MergeConfigurationsConf [3]int64
 
-var MergeConfigurations MergeConfigurationsConf
+func (m MergeConfigurationsConf) TimeoutSec() int64 {
+	return m[0]
+}
+
+func (m MergeConfigurationsConf) MaxSize() int64 {
+	return m[1]
+}
+
+func (m MergeConfigurationsConf) MergeIterationId() int64 {
+	return m[2]
+}
+
+var MergeConfigurations []MergeConfigurationsConf
 
 type Layer struct {
 	URL    string `json:"url"`
@@ -60,14 +72,14 @@ func (m MergePlan) Id() string {
 }
 
 type MovePlan struct {
-	ID        string
-	WriterID  string
-	Database  string
-	Table     string
-	PathFrom  string
-	LayerFrom string
-	PathTo    string
-	LayerTo   string
+	ID        string `json:"id"`
+	WriterID  string `json:"writer_id"`
+	Database  string `json:"database"`
+	Table     string `json:"table"`
+	PathFrom  string `json:"path_from"`
+	LayerFrom string `json:"layer_from"`
+	PathTo    string `json:"path_to"`
+	LayerTo   string `json:"layer_to"`
 }
 
 func (m MovePlan) Id() string {

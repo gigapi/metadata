@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+type redisLayer struct {
+	Layer
+	LayerTo string `json:"layer_to"`
+}
+
 type redisIndexEntry struct {
 	IndexEntry
 	StrMinTime   string `json:"str_min_time"`
@@ -58,7 +63,7 @@ type RedisIndex struct {
 
 	database string
 	table    string
-	layers   []Layer
+	layers   []redisLayer
 }
 
 func getRedisClient(u *url.URL) (*redis.Client, error) {
@@ -97,11 +102,24 @@ func NewRedisIndex(URL string, database string, table string, layers []Layer) (T
 	if err != nil {
 		return nil, err
 	}
+
+	redisLayers := make([]redisLayer, len(layers))
+	for i, layer := range layers {
+		layerTo := ""
+		if i < len(layers)-1 {
+			layerTo = layers[i+1].Name
+		}
+		redisLayers = append(redisLayers, redisLayer{
+			Layer:   layer,
+			LayerTo: layerTo,
+		})
+	}
+
 	idx := &RedisIndex{
 		url:      u,
 		database: database,
 		table:    table,
-		layers:   layers,
+		layers:   redisLayers,
 	}
 
 	client, err := getRedisClient(u)
@@ -161,7 +179,7 @@ func (r *RedisIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 		res.Done(0, err)
 		return res
 	}
-	lmap := make(map[string]Layer)
+	lmap := make(map[string]redisLayer)
 	for _, layer := range r.layers {
 		lmap[layer.Name] = layer
 	}

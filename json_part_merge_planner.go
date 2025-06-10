@@ -5,6 +5,7 @@ import (
 	"github.com/google/uuid"
 	"path"
 	"strings"
+	"time"
 )
 
 func (J *jsonPartIndex) GetMergePlan(writerId string, layer string, iteration int) (MergePlan, error) {
@@ -15,6 +16,7 @@ func (J *jsonPartIndex) GetMergePlan(writerId string, layer string, iteration in
 		return MergePlan{}, fmt.Errorf("no more merge configurations available for iteration %d", iteration)
 	}
 	conf := MergeConfigurations[iteration-1]
+	now := time.Now()
 	J.m.Lock()
 	defer J.m.Unlock()
 	J.entries.Range(func(key, value interface{}) bool {
@@ -25,9 +27,13 @@ func (J *jsonPartIndex) GetMergePlan(writerId string, layer string, iteration in
 		if J.filesInMerge[entry.Path] {
 			return true
 		}
+		if entry.ChunkTime+conf.TimeoutSec()*1000000000 >= now.UnixNano() {
+			return true
+		}
 		if size > conf[1] {
 			return false
 		}
+
 		from = append(from, entry.Path)
 		size += entry.SizeBytes
 		return true
@@ -40,6 +46,7 @@ func (J *jsonPartIndex) GetMergePlan(writerId string, layer string, iteration in
 	tablePath := path.Join(J.rootPath, J.database, J.table, "data") + "/"
 	partPath := J.idxPath[len(tablePath):]
 	return MergePlan{
+		Layer:     layer,
 		Database:  J.database,
 		Table:     J.table,
 		From:      from,

@@ -6,7 +6,7 @@ func (r *RedisIndex) GetMovePlanner() TableMovePlanner {
 
 func (r *RedisIndex) GetMovePlan(writerId string, layer string) (MovePlan, error) {
 	return (&redisTaskQueue[MovePlan]{
-		prefix:      "move:",
+		prefix:      "move",
 		database:    r.database,
 		table:       r.table,
 		suffix:      "",
@@ -19,7 +19,7 @@ func (r *RedisIndex) GetMovePlan(writerId string, layer string) (MovePlan, error
 
 func (r *RedisIndex) EndMove(plan MovePlan) Promise[int32] {
 	return Fulfilled((&redisTaskQueue[MovePlan]{
-		prefix:      "move:",
+		prefix:      "move",
 		database:    r.database,
 		table:       r.table,
 		suffix:      "",

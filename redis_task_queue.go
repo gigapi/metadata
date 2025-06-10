@@ -47,7 +47,7 @@ func (q *redisTaskQueue[T]) finishProcess(entry T) error {
 		suffix += ":"
 	}
 	key := fmt.Sprintf("%s:%s:%s:%s%s:%s:processing",
-		q.prefix, q.database, q.table, q.suffix, q.layer, q.writerId)
+		q.prefix, q.database, q.table, suffix, q.layer, q.writerId)
 	strQ, err := q.redis.LRange(context.Background(), key, 0, -1).Result()
 	if err != nil {
 		return err
@@ -56,10 +56,12 @@ func (q *redisTaskQueue[T]) finishProcess(entry T) error {
 		var _e T
 		err = json.Unmarshal([]byte(e), &_e)
 		if err != nil {
+			fmt.Println("Error unmarshalling entry:", err)
 			continue
 		}
 		if _e.Id() == entry.Id() {
 			_, err := q.redis.LRem(context.Background(), key, 1, e).Result()
+			fmt.Println("Removed entry from processing queue:", _e.Id())
 			return err
 		}
 	}

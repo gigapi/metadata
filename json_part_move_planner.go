@@ -5,7 +5,6 @@ import (
 )
 
 func (J *jsonPartIndex) GetMovePlan(writerId string, layer string) (MovePlan, error) {
-
 	J.m.Lock()
 	defer J.m.Unlock()
 	var plan *MovePlan
@@ -37,6 +36,9 @@ func (J *jsonPartIndex) GetMovePlan(writerId string, layer string) (MovePlan, er
 		}
 		return true
 	})
+	if plan == nil {
+		return MovePlan{}, nil
+	}
 	return *plan, nil
 }
 

@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -36,18 +37,42 @@ type JSONIndex struct {
 	layers   []jsonLayer
 }
 
-func NewJSONIndex(root string, database string, table string, layers []Layer) TableIndex {
+func NewJSONIndex(root string, database string, table string, layers []Layer) (TableIndex, error) {
 	var jLayers []jsonLayer
 	for _, layer := range layers {
 		jLayers = append(jLayers, layer2JsonLayer(layer))
 	}
-	return &JSONIndex{
+	res := &JSONIndex{
 		root:     root,
 		database: database,
 		table:    table,
 		parts:    map[string]map[string]*jsonPartIndex{},
 		layers:   jLayers,
 	}
+	for _, layer := range jLayers {
+		prefix := filepath.Join(layer.Path, database, table, "data")
+		err := filepath.Walk(prefix, func(path string, info fs.FileInfo, err error) error {
+			if info == nil {
+				return nil
+			}
+			if !info.IsDir() {
+				return nil
+			}
+			metadataPath := filepath.Join(path, "metadata.json")
+			if _, err := os.Stat(metadataPath); !os.IsNotExist(err) {
+				_, err := res.populate(layer.Name, path[len(prefix)+1:])
+				if err != nil {
+					return err
+				}
+				return filepath.SkipDir
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
 }
 
 func (J *JSONIndex) GetQuerier() TableQuerier {
@@ -92,7 +117,7 @@ func (J *JSONIndex) batchLayer(layer string, add []*IndexEntry, rm []*IndexEntry
 
 	var promises []Promise[int32]
 	for partPath := range paths {
-		idx, err := J.populate(partPath, layer)
+		idx, err := J.populate(layer, partPath)
 		if err != nil {
 			return Fulfilled[int32](err, 0)
 		}
@@ -101,7 +126,7 @@ func (J *JSONIndex) batchLayer(layer string, add []*IndexEntry, rm []*IndexEntry
 	return NewWaitForAll[int32](promises)
 }
 
-func (J *JSONIndex) populate(dir string, layer string) (*jsonPartIndex, error) {
+func (J *JSONIndex) populate(layer string, dir string) (*jsonPartIndex, error) {
 	layerParts := J.parts[layer]
 	if layerParts == nil {
 		layerParts = make(map[string]*jsonPartIndex)
@@ -163,9 +188,12 @@ func (J *JSONIndex) Stop() {
 	}
 }
 
-func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
+func (J *JSONIndex) findHours(options QueryOptions, layer jsonLayer) ([]time.Time, error) {
 	var hours []time.Time
-	err := filepath.Walk(path.Join(J.root, J.database, J.table), func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(path.Join(layer.Path, J.database, J.table, "data"), func(path string, info os.FileInfo, err error) error {
+		if info == nil {
+			return nil
+		}
 		if !info.IsDir() {
 			return nil
 		}
@@ -216,14 +244,14 @@ func (J *JSONIndex) findHours(options QueryOptions) ([]time.Time, error) {
 }
 
 func (J *JSONIndex) Query(options QueryOptions) ([]*IndexEntry, error) {
-	hours, err := J.findHours(options)
-	if err != nil {
-		return nil, err
-	}
 	var entries []*IndexEntry
 	for _, l := range J.layers {
 		if l.Path == "" {
 			continue
+		}
+		hours, err := J.findHours(options, l)
+		if err != nil {
+			return nil, err
 		}
 		for _, hour := range hours {
 			idx, err := J.populate(l.Name, path.Join(
