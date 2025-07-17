@@ -1,28 +1,32 @@
 package metadata
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"sync"
-	"time"
 )
 
 type jsonKVStoreIndex struct {
 	Path string
 
 	cache        map[string][]byte
-	saveTicker   *time.Ticker
+	saveCtx      context.Context
+	planSave     func()
+	ctx          context.Context
+	destroy      func()
 	m            sync.Mutex
 	savePromises []Promise[int32]
 }
 
 func NewJSONKVStoreIndex(path string) (KVStoreIndex, error) {
 	j := &jsonKVStoreIndex{
-		Path:       path,
-		cache:      make(map[string][]byte),
-		saveTicker: time.NewTicker(1 * time.Minute),
+		Path:  path,
+		cache: make(map[string][]byte),
 	}
+	j.saveCtx, j.planSave = context.WithCancel(context.Background())
+	j.ctx, j.destroy = context.WithCancel(context.Background())
 
 	ok, err := j.Load()
 	if err != nil {
@@ -41,8 +45,13 @@ func NewJSONKVStoreIndex(path string) (KVStoreIndex, error) {
 	}
 
 	go func() {
-		for range j.saveTicker.C {
-			j.doSave()
+		for {
+			select {
+			case <-j.saveCtx.Done():
+				j.doSave()
+			case <-j.ctx.Done():
+				return
+			}
 		}
 	}()
 
@@ -71,7 +80,7 @@ func (j *jsonKVStoreIndex) Load() (bool, error) {
 }
 
 func (j *jsonKVStoreIndex) Destroy() {
-	j.saveTicker.Stop()
+	j.destroy()
 }
 
 func (j *jsonKVStoreIndex) Get(key string) ([]byte, error) {
@@ -89,6 +98,7 @@ func (j *jsonKVStoreIndex) Put(key string, value []byte) error {
 	j.cache[key] = value
 	p := NewPromise[int32]()
 	j.savePromises = append(j.savePromises, p)
+	j.planSave()
 	j.m.Unlock()
 	_, err := p.Get()
 	return err
@@ -99,6 +109,7 @@ func (j *jsonKVStoreIndex) Delete(key string) error {
 	delete(j.cache, key)
 	p := NewPromise[int32]()
 	j.savePromises = append(j.savePromises, p)
+	j.planSave()
 	j.m.Unlock()
 	_, err := p.Get()
 	return err
@@ -109,6 +120,7 @@ func (j *jsonKVStoreIndex) doSave() {
 	cache := j.cache
 	promises := j.savePromises
 	j.savePromises = nil
+	j.saveCtx, j.planSave = context.WithCancel(context.Background())
 	j.m.Unlock()
 	release := func(err error) {
 		for _, p := range promises {
@@ -129,5 +141,10 @@ func (j *jsonKVStoreIndex) doSave() {
 	defer f.Close()
 
 	_, err = f.Write(contents)
+	if err != nil {
+		release(err)
+		return
+	}
+	err = os.Rename(j.Path+".tmp", j.Path)
 	release(err)
 }
