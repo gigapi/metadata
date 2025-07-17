@@ -100,6 +100,13 @@ func (d DropPlan) Id() string {
 	return d.ID
 }
 
+type KVStoreIndex interface {
+	Get(key string) ([]byte, error)
+	Put(key string, value []byte) error
+	Delete(key string) error
+	Destroy()
+}
+
 type DBIndex interface {
 	Databases() ([]string, error)
 	Tables(database string) ([]string, error)
