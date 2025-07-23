@@ -79,6 +79,20 @@ func (J *JSONIndex) GetQuerier() TableQuerier {
 	return J
 }
 
+func (J *JSONIndex) GetAll() ([]*IndexEntry, error) {
+	var res []*IndexEntry
+	for _, l := range J.parts {
+		for _, parts := range l {
+			_res, err := parts.GetAll()
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, _res...)
+		}
+	}
+	return res, nil
+}
+
 func (J *JSONIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	J.lock.Lock()
 	defer J.lock.Unlock()

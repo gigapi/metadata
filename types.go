@@ -122,6 +122,7 @@ type TableIndex interface {
 	GetQuerier() TableQuerier
 	GetMovePlanner() TableMovePlanner
 	GetDropPlanner() TableDropPlanner
+	GetAll() ([]*IndexEntry, error)
 }
 
 type TableDropPlanner interface {

@@ -79,6 +79,15 @@ func newJsonPartIndex(opts jsonPartIdxOpts) (*jsonPartIndex, error) {
 	return res, err
 }
 
+func (J *jsonPartIndex) GetAll() ([]*IndexEntry, error) {
+	var res []*IndexEntry
+	J.entries.Range(func(key, value interface{}) bool {
+		res = append(res, J.jEntry2Entry(value.(*jsonIndexEntry)))
+		return true
+	})
+	return res, nil
+}
+
 func (J *jsonPartIndex) getLayer(name string) int {
 	for i, layer := range J.layers {
 		if layer.Name == name {

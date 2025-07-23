@@ -154,6 +154,10 @@ func (r *RedisIndex) initFuncs() error {
 	return err
 }
 
+func (r *RedisIndex) GetAll() ([]*IndexEntry, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (r *RedisIndex) Batch(add []*IndexEntry, rm []*IndexEntry) Promise[int32] {
 	var cmds []any
 	for _, entry := range add {
